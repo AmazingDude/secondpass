@@ -7,6 +7,8 @@ import subprocess
 from pathlib import Path
 from typing import TypedDict
 
+from app.hooks import log_tool_call
+
 
 class Finding(TypedDict):
     rule_id: str
@@ -36,6 +38,7 @@ def _source_snippet(result: dict) -> str:
     return result.get("extra", {}).get("lines", "").strip()
 
 
+@log_tool_call
 def run_static_scan(paths: list[str]) -> list[Finding]:
     """Run Semgrep against paths and return normalized findings."""
     if not paths:

@@ -9,6 +9,8 @@ from typing import Any
 
 import chromadb
 
+from app.hooks import log_tool_call
+
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_LESSONS_PATH = _ROOT / "security_lessons.json"
 _DEFAULT_DB_PATH = _ROOT / ".chromadb"
@@ -73,6 +75,7 @@ def seed_memory(
     return len(ids)
 
 
+@log_tool_call
 def search_memory(
     query: str,
     n_results: int = 3,
@@ -94,11 +97,16 @@ def search_memory(
 
     for index, lesson_id in enumerate(ids):
         metadata = metadatas[index] if index < len(metadatas) else {}
+        distance = distances[index] if index < len(distances) else None
+        confidence = None
+        if isinstance(distance, (int, float)):
+            confidence = round(1 / (1 + float(distance)), 4)
         matches.append(
             {
                 "id": lesson_id,
                 "document": documents[index] if index < len(documents) else "",
-                "distance": distances[index] if index < len(distances) else None,
+                "distance": distance,
+                "confidence": confidence,
                 "type": metadata.get("type", ""),
                 "pattern": metadata.get("pattern", ""),
                 "bad_example": metadata.get("bad_example", ""),
@@ -109,6 +117,7 @@ def search_memory(
     return matches
 
 
+@log_tool_call
 def save_finding(
     finding: dict[str, Any],
     persist_directory: str | Path | None = None,

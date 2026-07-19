@@ -40,7 +40,9 @@ def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = No
         )
 
     api_key_env = config["api_key_env"]
-    api_key = os.getenv(api_key_env)
+    api_key = (os.getenv(api_key_env) or "").strip()
+    if not api_key and provider == "gemini":
+        api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
     if not api_key:
         raise RuntimeError(f"{api_key_env} is required when LLM_PROVIDER={provider}.")
 
@@ -51,5 +53,6 @@ def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = No
     }
     if tools is not None:
         request["tools"] = tools
+        request["tool_choice"] = "auto"
 
     return client.chat.completions.create(**request)

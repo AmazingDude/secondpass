@@ -6,6 +6,7 @@ __pycache__/
 .venv/
 venv/
 .chromadb/
+tool_calls.log
 
 .pytest_cache/
 .mypy_cache/

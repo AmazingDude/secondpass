@@ -12,6 +12,8 @@ from typing import TypedDict
 from dotenv import load_dotenv
 from tavily import TavilyClient
 
+from app.hooks import log_tool_call
+
 load_dotenv()
 
 
@@ -21,6 +23,7 @@ class WebResult(TypedDict):
     snippet: str
 
 
+@log_tool_call
 def search_web(query: str, max_results: int = 3) -> list[WebResult]:
     """Search the web with Tavily and return normalized title/url/snippet hits."""
     api_key = (os.getenv("TAVILY_API_KEY") or "").strip()
