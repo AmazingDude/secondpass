@@ -1,0 +1,42 @@
+[
+  {
+    "id": "lesson-1",
+    "type": "Broken Access Control",
+    "pattern": "GET route returns a resource without checking requester owns it",
+    "bad_example": "note = db.query(Note).get(note_id)\nreturn note  # any logged-in user can read any note",
+    "fix": "scope every read query by the authenticated user's ownership or admin role",
+    "source": "Internship Week 3 — cross-user read access gap"
+  },
+  {
+    "id": "lesson-2",
+    "type": "Injection / Logic Flaw",
+    "pattern": "filter matches substrings instead of exact or tokenized values",
+    "bad_example": "notes = Note.query.filter(Note.tags.contains(tag)).all()\n# 'dev' also matches 'developer' and 'devops'",
+    "fix": "match whole tokens (split tags, exact equality, or regex word boundaries), never raw substring contains on delimited fields",
+    "source": "Internship — tag-filter substring match bug"
+  },
+  {
+    "id": "lesson-3",
+    "type": "Race Condition / Session Management",
+    "pattern": "logout invalidates the session after other concurrent requests have already passed auth checks",
+    "bad_example": "def logout():\n    session.clear()  # in-flight requests still hold a valid session cookie\n    return redirect('/login')",
+    "fix": "rotate or revoke session tokens server-side immediately, reject requests using the old token, and avoid relying on client-side cookie clear alone",
+    "source": "Internship — logout race condition"
+  },
+  {
+    "id": "lesson-4",
+    "type": "Broken Access Control",
+    "pattern": "authorization check uses a client-supplied user id instead of the authenticated identity",
+    "bad_example": "def get_profile(user_id):\n    return User.query.get(request.args['user_id'])",
+    "fix": "derive the subject from the session or JWT claims; never trust a user_id from query params or body for ownership decisions",
+    "source": "Personal review checklist — IDOR via trusted request params"
+  },
+  {
+    "id": "lesson-5",
+    "type": "Sensitive Data Exposure",
+    "pattern": "error responses or debug logs leak internal identifiers, stack traces, or neighboring users' data",
+    "bad_example": "except Exception as e:\n    return jsonify({'error': str(e), 'query': sql})",
+    "fix": "return generic client errors, log details server-side only, and never include other users' records in error payloads",
+    "source": "Personal review checklist — over-verbose error handling"
+  }
+]
