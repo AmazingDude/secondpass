@@ -3,4 +3,5 @@ openai
 python-dotenv
 rich
 semgrep
+tavily-python
 typer

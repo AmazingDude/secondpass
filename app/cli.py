@@ -10,6 +10,7 @@ from rich.table import Table
 
 from app.memory import search_memory, seed_memory
 from app.scanner import ScanError, run_static_scan
+from app.websearch import search_web
 
 app = typer.Typer(
     name="secondpass",
@@ -98,6 +99,38 @@ def search_memory_cmd(
             str(match.get("source", "")),
             f"{distance:.4f}" if isinstance(distance, (int, float)) else "",
         )
+
+    console.print(table)
+
+
+@app.command("search-web")
+def search_web_cmd(
+    query: str = typer.Argument(..., help="Web search query."),
+    max_results: int = typer.Option(
+        3,
+        "--max-results",
+        "-n",
+        help="Maximum number of results to return.",
+    ),
+) -> None:
+    """Search the web with Tavily and print normalized results."""
+    try:
+        results = search_web(query, max_results=max_results)
+    except RuntimeError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
+        raise typer.Exit(code=1) from exc
+
+    if not results:
+        console.print("No web results found.")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f'Web results for "{query}"')
+    table.add_column("Title", overflow="fold")
+    table.add_column("URL", overflow="fold")
+    table.add_column("Snippet", overflow="fold")
+
+    for result in results:
+        table.add_row(result["title"], result["url"], result["snippet"])
 
     console.print(table)
 
