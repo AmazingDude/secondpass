@@ -131,31 +131,44 @@ def _render_llm_analysis(finding: dict[str, Any]) -> Panel:
 
 def _display_report(report: dict[str, Any]) -> None:
     console.print()
-    console.print(
-        Panel.fit(
-            Text.from_markup(
-                f"[bold]secondpass review[/bold]\n"
-                f"Path: {report.get('path', '')}\n"
-                f"Provider: {report.get('provider', 'unknown')}"
-                + (
-                    f"  Model: {report['model']}"
-                    if report.get("model")
-                    else ""
-                )
-                + f"\nFindings reviewed: {report.get('finding_count', 0)}"
-                + (
-                    "\n[dim]Static scan empty — used logic-review fallback[/dim]"
-                    if report.get("static_scan_empty")
-                    else ""
-                )
-            ),
-            border_style="white",
+    header = Text()
+    header.append("secondpass review\n", style="bold")
+    header.append(f"Path: {report.get('path', '')}\n")
+    header.append(f"Provider: {report.get('provider', 'unknown')}")
+    if report.get("model"):
+        header.append(f"  Model: {report['model']}")
+    header.append(f"\nFindings reviewed: {report.get('finding_count', 0)}")
+    if report.get("static_scan_error"):
+        header.append(
+            f"\nStatic scan error (continued): {report['static_scan_error']}",
+            style="yellow",
         )
-    )
+    elif report.get("used_logic_fallback"):
+        header.append(
+            "\nStatic scan empty — used logic-review fallback",
+            style="dim",
+        )
+    elif report.get("static_scan_empty"):
+        header.append("\nStatic scan reported no issues", style="dim")
+
+    console.print(Panel.fit(header, border_style="white"))
 
     findings = report.get("findings") or []
     if not findings:
-        console.print("\n[bold yellow]No findings to review.[/bold yellow]")
+        console.print()
+        console.print(
+            Panel(
+                Text(
+                    "Nothing to review.\n"
+                    "Semgrep reported no issues and there was no source content "
+                    "for a logic fallback.",
+                    style="yellow",
+                ),
+                title="Clean result",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+        )
         return
 
     for index, item in enumerate(findings, start=1):
@@ -172,6 +185,10 @@ def _display_report(report: dict[str, Any]) -> None:
         console.print(_render_memory(item))
         console.print(_render_web_context(item))
         console.print(_render_llm_analysis(item))
+        if item.get("saved_lesson_id"):
+            console.print(
+                f"[green]Saved new lesson:[/green] {item['saved_lesson_id']}"
+            )
 
     failures = int(report.get("tool_call_failures") or 0)
     if failures:

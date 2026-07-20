@@ -10,7 +10,7 @@ from typing import Any, Callable
 
 from app.llm import chat
 from app.memory import save_finding, search_memory, seed_memory
-from app.scanner import Finding, run_static_scan
+from app.scanner import Finding, ScanError, run_static_scan
 from app.websearch import search_web
 
 try:
@@ -97,9 +97,12 @@ TOOL_DEFINITIONS: list[dict[str, Any]] = [
         "function": {
             "name": "save_finding",
             "description": (
-                "Persist a confirmed lesson into long-term memory so future "
-                "reviews can recall it. Pass type, pattern, bad_example, fix, "
-                "and optional source/id fields."
+                "Persist a NEW confirmed lesson into long-term memory. "
+                "ONLY call this when the issue is meaningfully new or a distinct "
+                "variant worth remembering. Do NOT save if search_memory already "
+                "returned a close match for the same pattern (for example the same "
+                "missing-ownership / IDOR lesson). Prefer reusing the matched lesson "
+                "over creating a near-duplicate."
             ),
             "parameters": {
                 "type": "object",
@@ -137,8 +140,12 @@ You are secondpass, a careful personal security review agent.
 You are given one static-analysis finding. Gather useful context before concluding:
 - Prefer calling search_memory at least once for similar past lessons.
 - Call search_web when public guidance (for example OWASP) would strengthen the advice.
-- Call save_finding only if this is a confirmed reusable lesson worth remembering.
+- Call save_finding ONLY when this finding is meaningfully new or a genuinely distinct
+  variant that is not already covered by a close memory match. If search_memory returns
+  a strong/close match for the same pattern, do NOT save a near-duplicate — cite the
+  existing lesson instead.
 - You choose which tools to call and in what order; do not invent tool results.
+- If a tool errors (network, missing key, etc.), continue with whatever evidence you have.
 
 When finished, respond with ONLY a JSON object (no markdown fences):
 {
@@ -301,7 +308,13 @@ def _review_finding(finding: Finding, max_iterations: int = MAX_TOOL_ITERATIONS)
                 elif name == "search_web" and isinstance(result, list):
                     web_context.extend(result)
                 elif name == "save_finding":
-                    saved_lesson_id = str(result)
+                    if isinstance(result, dict) and result.get("status") == "saved":
+                        saved_lesson_id = str(result.get("id"))
+                    elif isinstance(result, dict) and result.get("status") == "skipped":
+                        # Keep going; near-duplicate guard refused the write.
+                        pass
+                    else:
+                        saved_lesson_id = str(result)
                 payload = _serialize_tool_result(result)
             except Exception as exc:  # noqa: BLE001 — feed errors back to the model
                 payload = json.dumps({"error": str(exc)}, ensure_ascii=False)
@@ -330,23 +343,35 @@ def _review_finding(finding: Finding, max_iterations: int = MAX_TOOL_ITERATIONS)
     }
 
 
-def _logic_review_finding(path: str) -> Finding:
+def _logic_review_finding(path: str, *, reason: str | None = None) -> Finding:
     """Build a fallback finding so logic bugs Semgrep misses can still be reviewed."""
     source = Path(path).read_text(encoding="utf-8")
     snippet = source.strip()
     if len(snippet) > 2000:
         snippet = snippet[:2000] + "\n..."
+    message = (
+        reason
+        or (
+            "No Semgrep findings. Review this source for access-control and "
+            "authorization logic flaws (for example missing ownership checks)."
+        )
+    )
     return {
         "rule_id": "secondpass.logic-review",
         "severity": "INFO",
         "path": path,
         "line": 1,
-        "message": (
-            "No Semgrep findings. Review this source for access-control and "
-            "authorization logic flaws (for example missing ownership checks)."
-        ),
+        "message": message,
         "snippet": snippet,
     }
+
+
+def _source_is_reviewable(path: str) -> bool:
+    try:
+        text = Path(path).read_text(encoding="utf-8").strip()
+    except (OSError, UnicodeError):
+        return False
+    return bool(text)
 
 
 def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[str, Any]:
@@ -354,10 +379,25 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
     target = str(Path(path).resolve())
     seed_memory()
 
-    findings = run_static_scan([target])
+    scan_error: str | None = None
+    findings: list[Finding] = []
+    try:
+        findings = run_static_scan([target])
+    except ScanError as exc:
+        scan_error = str(exc)
+        findings = []
+
     scan_empty = not findings
-    if scan_empty:
-        findings = [_logic_review_finding(target)]
+    used_logic_fallback = False
+    if scan_empty and _source_is_reviewable(target):
+        used_logic_fallback = True
+        reason = None
+        if scan_error:
+            reason = (
+                f"Static scan unavailable ({scan_error}). Falling back to a "
+                "logic/authorization review of the source."
+            )
+        findings = [_logic_review_finding(target, reason=reason)]
 
     reviewed = [
         _review_finding(finding, max_iterations=max_iterations) for finding in findings
@@ -368,7 +408,9 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
         "provider": os.getenv("LLM_PROVIDER", "groq"),
         "model": os.getenv("LLM_MODEL") or None,
         "finding_count": len(reviewed),
-        "static_scan_empty": scan_empty,
+        "static_scan_empty": scan_empty and scan_error is None,
+        "static_scan_error": scan_error,
+        "used_logic_fallback": used_logic_fallback,
         "tool_call_failures": sum(
             int(item.get("tool_call_failures") or 0) for item in reviewed
         ),

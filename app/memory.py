@@ -121,13 +121,44 @@ def search_memory(
 def save_finding(
     finding: dict[str, Any],
     persist_directory: str | Path | None = None,
-) -> str:
-    """Add a confirmed lesson to the collection at runtime."""
+    *,
+    duplicate_distance_threshold: float = 1.15,
+) -> dict[str, Any]:
+    """Add a confirmed lesson, skipping near-duplicates already in memory.
+
+    Returns a status dict:
+    - ``{"status": "saved", "id": "..."}``
+    - ``{"status": "skipped", "reason": "...", "matched_id": "...", "distance": ...}``
+    """
     collection = init_memory(persist_directory)
+    document = _lesson_document(finding)
+
+    if collection.count() > 0:
+        raw = collection.query(query_texts=[document], n_results=1)
+        matched_ids = (raw.get("ids") or [[]])[0]
+        distances = (raw.get("distances") or [[]])[0]
+        if matched_ids:
+            distance = distances[0] if distances else None
+            if isinstance(distance, (int, float)) and float(distance) <= duplicate_distance_threshold:
+                return {
+                    "status": "skipped",
+                    "reason": (
+                        "near_duplicate of an existing lesson; "
+                        "not saved to avoid cluttering memory"
+                    ),
+                    "matched_id": matched_ids[0],
+                    "distance": float(distance),
+                }
+
     lesson_id = str(finding.get("id") or f"finding-{uuid.uuid4()}")
+    # Avoid colliding with an existing id by appending a suffix when needed.
+    existing = set(collection.get(include=[]).get("ids") or [])
+    if lesson_id in existing:
+        lesson_id = f"{lesson_id}-{uuid.uuid4().hex[:8]}"
+
     collection.add(
         ids=[lesson_id],
-        documents=[_lesson_document(finding)],
+        documents=[document],
         metadatas=[_lesson_metadata(finding)],
     )
-    return lesson_id
+    return {"status": "saved", "id": lesson_id}
