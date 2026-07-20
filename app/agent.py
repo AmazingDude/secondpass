@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import re
+import os
 from pathlib import Path
 from typing import Any, Callable
 
@@ -252,11 +253,13 @@ def _review_finding(finding: Finding, max_iterations: int = MAX_TOOL_ITERATIONS)
     saved_lesson_id: str | None = None
     explanation = ""
     suggested_fix = ""
+    tool_call_failures = 0
 
     for iteration in range(max_iterations):
         try:
             response = chat(messages, tools=TOOL_DEFINITIONS)
         except BadRequestError as exc:
+            tool_call_failures += 1
             # Some providers (notably Groq) occasionally emit malformed tool calls.
             # Nudge the model to either retry properly or finish with JSON.
             messages.append(
@@ -323,6 +326,26 @@ def _review_finding(finding: Finding, max_iterations: int = MAX_TOOL_ITERATIONS)
         "saved_lesson_id": saved_lesson_id,
         "explanation": explanation,
         "suggested_fix": suggested_fix,
+        "tool_call_failures": tool_call_failures,
+    }
+
+
+def _logic_review_finding(path: str) -> Finding:
+    """Build a fallback finding so logic bugs Semgrep misses can still be reviewed."""
+    source = Path(path).read_text(encoding="utf-8")
+    snippet = source.strip()
+    if len(snippet) > 2000:
+        snippet = snippet[:2000] + "\n..."
+    return {
+        "rule_id": "secondpass.logic-review",
+        "severity": "INFO",
+        "path": path,
+        "line": 1,
+        "message": (
+            "No Semgrep findings. Review this source for access-control and "
+            "authorization logic flaws (for example missing ownership checks)."
+        ),
+        "snippet": snippet,
     }
 
 
@@ -332,10 +355,22 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
     seed_memory()
 
     findings = run_static_scan([target])
-    reviewed = [_review_finding(finding, max_iterations=max_iterations) for finding in findings]
+    scan_empty = not findings
+    if scan_empty:
+        findings = [_logic_review_finding(target)]
+
+    reviewed = [
+        _review_finding(finding, max_iterations=max_iterations) for finding in findings
+    ]
 
     return {
         "path": target,
-        "finding_count": len(findings),
+        "provider": os.getenv("LLM_PROVIDER", "groq"),
+        "model": os.getenv("LLM_MODEL") or None,
+        "finding_count": len(reviewed),
+        "static_scan_empty": scan_empty,
+        "tool_call_failures": sum(
+            int(item.get("tool_call_failures") or 0) for item in reviewed
+        ),
         "findings": reviewed,
     }
