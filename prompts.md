@@ -203,6 +203,44 @@ Also do a final pass: check the CLI output is clean when there are ZERO findings
 
 ---
 
+## 8. Adding git diff support, a gap I'd missed
+
+**Tool:** Cursor (Auto/Composer)
+**Goal:** Realized after finishing step 7 that the tool only ever supported reviewing a single file or folder path, the git-diff-based "review what I just changed before I commit" workflow, the whole reason this beats a blind full-file scanner, was decided early on but never actually got built. Caught this myself going back over the original scope.
+
+**Prompt used:**
+
+```
+Add git diff support to secondpass. Add a --diff flag to the review command:
+
+secondpass review --diff
+
+This should:
+1. Run `git diff --staged` (or unstaged if nothing's staged, your call, explain the choice) to get the actually changed lines/files in the current repo
+2. Extract just the changed file paths from that diff
+3. Run review_code() against those changed files only, not the whole repo
+4. If a file is only partially changed, still analyze the whole file for context (Semgrep/logic review needs surrounding code), but only report on findings that fall within the changed line ranges, so the user isn't shown unrelated pre-existing issues in code they didn't touch
+
+Keep the existing `review <path>` command working as-is for reviewing a specific file directly. --diff is an additional mode, not a replacement.
+```
+
+**Result:** Checks staged changes first (matches the actual pre-commit moment), falls back to unstaged if nothing's staged yet so the command still works mid-edit. Scans the whole file for context but only reports findings on added lines, plus file-level logic-review findings if the file was touched at all. Verified against a staged one-file test with a deliberate shell=True issue, correctly picked up staged mode, 1 file, reported the finding on the right line.
+
+**Review notes:** This was the actual intended daily-use workflow from the start, decided on early in planning, then dropped somewhere in the build without me noticing until I went back over the original scope. Read through gitdiff.py specifically, parsing a unified diff to figure out which lines were actually added (not just which file changed) versus surrounding context lines is fiddlier than anything else in this project, worth understanding the shape of it (the +/- prefixes and @@ hunk headers) even without tracing every line.
+
+---
+
+Real intended usage:
+
+```bash
+git add .
+secondpass review --diff
+# fix anything flagged
+git commit -m "..."
+```
+
+---
+
 ## What's built, mapped to the assignment checklist
 
 - Research/review agent with a web-search skill: done (Tavily)
@@ -210,5 +248,3 @@ Also do a final pass: check the CLI output is clean when there are ZERO findings
 - Hook logging every tool call with timestamps: done (app/hooks.py)
 - File-read plugin: done (the scanner + agent loop both read and reason over real source files)
 - Multi-hop demo: done (scan finds nothing on the IDOR file, falls back to logic review, checks memory, checks web, produces a synthesized fix, all chained in one review)
-
-Next up (Week 5): exposing review_code() as an MCP tool so it can be called directly from Cursor, and splitting the internal logic (memory lookup vs web lookup) into a supervisor + worker multi-agent structure instead of one flat loop. Same core project, not a new one.

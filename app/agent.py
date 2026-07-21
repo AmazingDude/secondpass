@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 from typing import Any, Callable
 
+from app.gitdiff import ChangedFile, finding_in_changed_lines
 from app.llm import chat
 from app.memory import save_finding, search_memory, seed_memory
 from app.scanner import Finding, ScanError, run_static_scan
@@ -415,4 +416,58 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
             int(item.get("tool_call_failures") or 0) for item in reviewed
         ),
         "findings": reviewed,
+    }
+
+
+def review_changed_files(
+    changed_files: list[ChangedFile],
+    *,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
+    mode: str = "staged",
+) -> dict[str, Any]:
+    """Review whole changed files, then keep findings that fall in diff hunks."""
+    files = list(changed_files)
+    seed_memory()
+
+    combined: list[dict[str, Any]] = []
+    scan_errors: list[str] = []
+    used_logic_fallback = False
+    static_scan_empty = True
+    filtered_out = 0
+
+    for changed in files:
+        report = review_code(str(changed.path), max_iterations=max_iterations)
+        if report.get("static_scan_error"):
+            scan_errors.append(f"{changed.path}: {report['static_scan_error']}")
+        if not report.get("static_scan_empty"):
+            static_scan_empty = False
+        if report.get("used_logic_fallback"):
+            used_logic_fallback = True
+
+        for item in report.get("findings") or []:
+            finding = item.get("finding") or {}
+            line = int(finding.get("line") or 0)
+            rule_id = str(finding.get("rule_id") or "")
+            if finding_in_changed_lines(line, changed, rule_id=rule_id):
+                enriched = dict(item)
+                enriched["diff_ranges"] = list(changed.ranges)
+                combined.append(enriched)
+            else:
+                filtered_out += 1
+
+    return {
+        "path": f"git diff ({mode})",
+        "provider": os.getenv("LLM_PROVIDER", "groq"),
+        "model": os.getenv("LLM_MODEL") or None,
+        "finding_count": len(combined),
+        "static_scan_empty": static_scan_empty and not scan_errors,
+        "static_scan_error": "; ".join(scan_errors) if scan_errors else None,
+        "used_logic_fallback": used_logic_fallback,
+        "tool_call_failures": sum(
+            int(item.get("tool_call_failures") or 0) for item in combined
+        ),
+        "diff_mode": mode,
+        "changed_files": [str(item.path) for item in files],
+        "filtered_out_findings": filtered_out,
+        "findings": combined,
     }

@@ -12,7 +12,8 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from app.agent import review_code
+from app.agent import review_changed_files, review_code
+from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
 from app.scanner import ScanError
 from app.websearch import search_web
@@ -138,6 +139,16 @@ def _display_report(report: dict[str, Any]) -> None:
     if report.get("model"):
         header.append(f"  Model: {report['model']}")
     header.append(f"\nFindings reviewed: {report.get('finding_count', 0)}")
+    if report.get("diff_mode"):
+        header.append(f"\nDiff mode: {report['diff_mode']}")
+        changed = report.get("changed_files") or []
+        header.append(f"\nChanged files: {len(changed)}")
+        filtered_out = int(report.get("filtered_out_findings") or 0)
+        if filtered_out:
+            header.append(
+                f"\nFiltered out (outside changed lines): {filtered_out}",
+                style="dim",
+            )
     if report.get("static_scan_error"):
         header.append(
             f"\nStatic scan error (continued): {report['static_scan_error']}",
@@ -156,19 +167,37 @@ def _display_report(report: dict[str, Any]) -> None:
     findings = report.get("findings") or []
     if not findings:
         console.print()
-        console.print(
-            Panel(
-                Text(
-                    "Nothing to review.\n"
-                    "Semgrep reported no issues and there was no source content "
-                    "for a logic fallback.",
-                    style="yellow",
-                ),
-                title="Clean result",
-                border_style="yellow",
-                padding=(1, 2),
+        if report.get("diff_mode"):
+            filtered_out = int(report.get("filtered_out_findings") or 0)
+            detail = (
+                "No findings on the changed lines."
+                if filtered_out
+                else "No reviewable findings in the selected diff."
             )
-        )
+            if filtered_out:
+                detail += f"\n({filtered_out} finding(s) were outside the changed line ranges.)"
+            console.print(
+                Panel(
+                    Text(detail, style="yellow"),
+                    title="Clean result",
+                    border_style="yellow",
+                    padding=(1, 2),
+                )
+            )
+        else:
+            console.print(
+                Panel(
+                    Text(
+                        "Nothing to review.\n"
+                        "Semgrep reported no issues and there was no source content "
+                        "for a logic fallback.",
+                        style="yellow",
+                    ),
+                    title="Clean result",
+                    border_style="yellow",
+                    padding=(1, 2),
+                )
+            )
         return
 
     for index, item in enumerate(findings, start=1):
@@ -200,22 +229,77 @@ def _display_report(report: dict[str, Any]) -> None:
 
 @app.command()
 def review(
-    path: Path = typer.Argument(
-        ...,
+    path: Path | None = typer.Argument(
+        None,
         exists=True,
         readable=True,
         resolve_path=True,
-        help="File or directory to review.",
+        help="File or directory to review. Omit when using --diff.",
+    ),
+    diff: bool = typer.Option(
+        False,
+        "--diff",
+        help=(
+            "Review files from git diff (staged preferred; unstaged if nothing "
+            "is staged). Analyzes whole files, reports only findings on changed lines."
+        ),
     ),
 ) -> None:
     """Run the full secondpass agent review and display a structured report."""
-    console.print(
-        f"[bold]Starting review of[/bold] {path}\n"
-        "[dim]Tool calls will stream below as the agent works...[/dim]\n"
-    )
+    if diff and path is not None:
+        console.print(
+            "[bold red]Error:[/bold red] Use either `review <path>` or "
+            "`review --diff`, not both.",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+    if not diff and path is None:
+        console.print(
+            "[bold red]Error:[/bold red] Provide a path or pass --diff.",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+
     try:
-        report = review_code(str(path))
-    except (ScanError, ValueError, RuntimeError) as exc:
+        if diff:
+            selection = collect_diff_selection()
+            if not selection.files:
+                console.print(
+                    Panel(
+                        Text(
+                            f"No {selection.mode} changes to review.\n"
+                            "Stage files (`git add`) or edit something first.",
+                            style="yellow",
+                        ),
+                        title="Clean result",
+                        border_style="yellow",
+                        padding=(1, 2),
+                    )
+                )
+                return
+
+            console.print(
+                f"[bold]Starting diff review[/bold] "
+                f"([cyan]{selection.mode}[/cyan], "
+                f"{len(selection.files)} file(s))\n"
+                "[dim]Whole files are scanned for context; only findings on "
+                "changed lines are reported. Tool calls stream below...[/dim]\n"
+            )
+            for changed in selection.files:
+                ranges = ", ".join(f"{start}-{end}" for start, end in changed.ranges) or "n/a"
+                console.print(f"  • {changed.path}  [dim]lines {ranges}[/dim]")
+            console.print()
+            report = review_changed_files(
+                selection.files,
+                mode=selection.mode,
+            )
+        else:
+            console.print(
+                f"[bold]Starting review of[/bold] {path}\n"
+                "[dim]Tool calls will stream below as the agent works...[/dim]\n"
+            )
+            report = review_code(str(path))
+    except (ScanError, GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
     except Exception as exc:  # noqa: BLE001 — surface unexpected agent failures cleanly
