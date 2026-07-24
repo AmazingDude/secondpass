@@ -3,7 +3,9 @@
 from __future__ import annotations
 
 import json
+import shutil
 import subprocess
+import sys
 from pathlib import Path
 from typing import TypedDict
 
@@ -21,6 +23,22 @@ class Finding(TypedDict):
 
 class ScanError(RuntimeError):
     """Raised when Semgrep cannot complete a scan."""
+
+
+def _resolve_semgrep() -> str:
+    """Prefer the Semgrep next to this Python (venv), then PATH."""
+    scripts_dir = Path(sys.executable).resolve().parent
+    for name in ("semgrep.exe", "semgrep"):
+        candidate = scripts_dir / name
+        if candidate.is_file():
+            return str(candidate)
+    found = shutil.which("semgrep")
+    if found:
+        return found
+    raise FileNotFoundError(
+        "Semgrep is not installed or is not on PATH. "
+        "Install dependencies with: pip install -r requirements.txt"
+    )
 
 
 def _source_snippet(result: dict) -> str:
@@ -44,8 +62,13 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
     if not paths:
         raise ValueError("At least one path is required.")
 
+    try:
+        semgrep_bin = _resolve_semgrep()
+    except FileNotFoundError as exc:
+        raise ScanError(str(exc)) from exc
+
     command = [
-        "semgrep",
+        semgrep_bin,
         "scan",
         "--config",
         "p/python",

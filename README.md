@@ -72,6 +72,7 @@ High-level component map:
 
 - **Static scan** via Semgrep (`p/python`, `p/javascript`)
 - **Git diff mode** — review only what you changed (staged preferred)
+- **MCP server** — expose `review_code` to Claude Code / Cursor / other MCP clients over stdio
 - **Persistent memory** with ChromaDB, seeded from `security_lessons.json`
 - **Web search** via Tavily for OWASP / remediation context
 - **Provider-agnostic LLM** — Groq, Gemini, or OpenRouter (OpenAI-compatible APIs)
@@ -181,6 +182,58 @@ python -m app.cli search-memory "user can read someone else's data"
 python -m app.cli search-web "OWASP broken access control A01"
 ```
 
+### MCP server (expose review as a tool)
+
+secondpass can run as a local **MCP** server over stdio, exposing one tool: `review_code`.
+
+```bash
+# from the secondpass project root, with venv active
+python -m app.mcp_server
+```
+
+That process speaks MCP on stdin/stdout — don’t type into it; an MCP client launches it.
+
+**Why one tool (path + optional `diff`), not two:** Agents do better with a single, clear capability (“security-review this code”) than with overlapping tools. Path mode is the primary, explicit target; `diff=true` is a narrow alternate input that reuses the same report shape. Diff-only as a separate tool would split the same skill across two names.
+
+**Cursor** — add to MCP settings (`.cursor/mcp.json` in the project or user config):
+
+```json
+{
+  "mcpServers": {
+    "secondpass": {
+      "command": "C:\\Users\\Rehan\\Desktop\\web-dev\\secondpass\\.venv\\Scripts\\python.exe",
+      "args": ["-m", "app.mcp_server"],
+      "cwd": "C:\\Users\\Rehan\\Desktop\\web-dev\\secondpass",
+      "env": {}
+    }
+  }
+}
+```
+
+(Keys still load from secondpass `.env` via `load_dotenv`.)
+
+**Claude Code** — register a local server (paths adjusted for your machine):
+
+```bash
+claude mcp add secondpass --cwd "C:/Users/Rehan/Desktop/web-dev/secondpass" -- "C:/Users/Rehan/Desktop/web-dev/secondpass/.venv/Scripts/python.exe" -m app.mcp_server
+```
+
+Then ask Claude to call `review_code` with e.g. `{"path": "app/scanner.py"}` or `{"diff": true}`.
+
+**MCP Inspector** (interactive UI):
+
+```bash
+npx @modelcontextprotocol/inspector "C:\Users\Rehan\Desktop\web-dev\secondpass\.venv\Scripts\python.exe" -m app.mcp_server
+```
+
+Set the working directory to the secondpass root if the inspector asks for it.
+
+**Programmatic smoke test** (no external client):
+
+```bash
+python -m app.mcp_client_smoke path/to/file.py
+```
+
 ---
 
 ## How it works
@@ -195,6 +248,7 @@ python -m app.cli search-web "OWASP broken access control A01"
 | `app/hooks.py`          | Logs every tool call (console + `tool_calls.log`)        |
 | `app/agent.py`          | Planner loop: scan → LLM tool calls → structured report  |
 | `app/cli.py`            | Typer CLI + Rich output                                  |
+| `app/mcp_server.py`     | MCP stdio server exposing `review_code`                  |
 | `security_lessons.json` | Seed lessons (your real past bugs)                       |
 
 **Agent flow (simplified):**
@@ -239,6 +293,7 @@ secondpass/
 │   ├── hooks.py
 │   ├── llm.py
 │   ├── memory.py
+│   ├── mcp_server.py
 │   ├── scanner.py
 │   └── websearch.py
 ├── security_lessons.json
