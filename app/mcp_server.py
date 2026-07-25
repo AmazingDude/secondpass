@@ -60,6 +60,8 @@ def review_code_tool(
 
     Returns JSON with finding_count, findings[] (scan detail, memory_match,
     web_context, explanation, suggested_fix), and metadata (provider, etc.).
+    When the review concludes cleanly, finding_count is 0, findings is [],
+    no_issues is true, and message explains that no issues were found.
     """
     # Lazy-import heavy deps so server startup / list_tools stays fast.
     from app.agent import review_changed_files, review_code

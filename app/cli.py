@@ -154,6 +154,11 @@ def _display_report(report: dict[str, Any]) -> None:
             f"\nStatic scan error (continued): {report['static_scan_error']}",
             style="yellow",
         )
+    elif report.get("used_logic_fallback") and report.get("no_issues"):
+        header.append(
+            "\nStatic scan empty — logic review found no issues",
+            style="green",
+        )
     elif report.get("used_logic_fallback"):
         header.append(
             "\nStatic scan empty — used logic-review fallback",
@@ -169,32 +174,39 @@ def _display_report(report: dict[str, Any]) -> None:
         console.print()
         if report.get("diff_mode"):
             filtered_out = int(report.get("filtered_out_findings") or 0)
-            detail = (
-                "No findings on the changed lines."
-                if filtered_out
-                else "No reviewable findings in the selected diff."
-            )
-            if filtered_out:
+            detail = str(report.get("message") or "").strip()
+            if not detail:
+                detail = (
+                    "No findings on the changed lines."
+                    if filtered_out
+                    else "No reviewable findings in the selected diff."
+                )
+            if filtered_out and "outside" not in detail.lower():
                 detail += f"\n({filtered_out} finding(s) were outside the changed line ranges.)"
             console.print(
                 Panel(
-                    Text(detail, style="yellow"),
-                    title="Clean result",
-                    border_style="yellow",
+                    Text(detail, style="green"),
+                    title="No issues found",
+                    border_style="green",
                     padding=(1, 2),
                 )
             )
         else:
+            detail = str(report.get("message") or "").strip()
+            if not detail:
+                if report.get("used_logic_fallback"):
+                    detail = "No security issues found."
+                else:
+                    detail = (
+                        "Nothing to review.\n"
+                        "Semgrep reported no issues and there was no source "
+                        "content for a logic fallback."
+                    )
             console.print(
                 Panel(
-                    Text(
-                        "Nothing to review.\n"
-                        "Semgrep reported no issues and there was no source content "
-                        "for a logic fallback.",
-                        style="yellow",
-                    ),
-                    title="Clean result",
-                    border_style="yellow",
+                    Text(detail, style="green"),
+                    title="No issues found",
+                    border_style="green",
                     padding=(1, 2),
                 )
             )
