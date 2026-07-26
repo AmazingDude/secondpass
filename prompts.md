@@ -239,12 +239,50 @@ secondpass review --diff
 git commit -m "..."
 ```
 
+## 9. MCP server exposing review as a callable tool
+
+**Tool:** Cursor (Auto/Composer)
+**Goal:** Week 5's first requirement, expose the review capability as an MCP tool over stdio so it can be called from Claude Code or Cursor directly.
+
+**Result:** One tool, review_code, with a path input and a diff flag rather than two separate tools, since it's the same underlying capability and one report shape, matches Week 5's "narrow, well-named tools" guidance. Had to move hook logging from stdout to stderr, since MCP's JSON-RPC protocol needs stdout to carry only clean protocol messages, any stray print statement would corrupt it. Verified with a standalone smoke test client before connecting a real MCP client.
+
+**Review notes:** Chose stdio over HTTP transport since that's what local IDE clients (Claude Code, Cursor) actually use, connecting by spawning the server as a subprocess. HTTP would matter if this ever became a hosted service for multiple remote users, not needed for personal local use right now, and the transport layer is separate enough from the tool logic that adding HTTP later wouldn't require rebuilding anything.
+
 ---
 
-## What's built, mapped to the assignment checklist
+## 10. Fix: Semgrep not found when Cursor spawned the server
 
-- Research/review agent with a web-search skill: done (Tavily)
-- Memory: done (ChromaDB, seeded from 5 real security lessons, semantically verified to discriminate between bug types)
-- Hook logging every tool call with timestamps: done (app/hooks.py)
-- File-read plugin: done (the scanner + agent loop both read and reason over real source files)
-- Multi-hop demo: done (scan finds nothing on the IDOR file, falls back to logic review, checks memory, checks web, produces a synthesized fix, all chained in one review)
+**Tool:** Cursor (Auto/Composer)
+**Goal:** MCP worked when I ran the server manually, but when Cursor spawned it, Semgrep couldn't be found, the venv's Scripts folder wasn't on the PATH in that spawned process.
+
+**Result:** scanner.py now resolves semgrep.exe relative to the active Python interpreter's location instead of relying only on PATH. Also updated .cursor/mcp.json to prepend the venv Scripts directory to PATH as a backup. Verified against a real shell=True sample through the actual Cursor-spawned server, not just the manual smoke test.
+
+---
+
+## 11. Supervisor + worker multi-agent split
+
+**Tool:** Cursor (Auto/Composer)
+**Goal:** Week 5's second requirement, move from one flat planner loop to a supervisor routing to at least two worker sub-agents.
+
+**Result:** Split into a Supervisor, a MemoryWorker (only calls search_memory and interprets the match), and a WebResearchWorker (only calls search_web and interprets relevance). Supervisor decides which worker(s) to route a finding to, collects their outputs, and synthesizes the final report, still calling save_finding with the same dedup gate as before. Hook logging updated to show which agent made each call, not just the tool name, so the trace shows real hand-offs. Public entry points (review_code, review_changed_files) didn't change, so the CLI and MCP tool needed no changes, this was purely an internal restructure.
+
+**Review notes:** Ran the same IDOR test through the new structure and traced the full hand-off sequence, supervisor scans, falls back to logic review, routes to memory worker, routes to web worker, synthesizes, confirms the report quality matched the pre-refactor version exactly. Good proof the refactor didn't quietly change behavior.
+
+---
+
+## 12. Fix: logic-review fallback was manufacturing false positives
+
+**Tool:** Cursor (Auto/Composer)
+**Goal:** Noticed the logic-review fallback (used when Semgrep finds nothing) was flagging a vague RBAC/ownership concern on basically every file, even genuinely clean helper functions, not a real finding, just the LLM defaulting to always saying something.
+
+**Result:** Added an explicit assessor step before the supervisor runs, the LLM now has to decide has_issues true or false, and the prompt explicitly forbids inventing vague generic concerns. Clean code now correctly returns no_issues: true instead of a fabricated finding. Tested three cases: the IDOR file still correctly flags the real missing ownership check, a genuinely clean helper function now reports no issues, and app/scanner.py itself (previously falsely flagged) now comes back clean too. Also deleted the 3 junk lessons that had been saved into memory from this false-positive behavior, memory is back to the original 5 real, curated lessons.
+
+**Review notes:** This is a good example of catching a subtle but real problem, the fallback wasn't broken in the sense of crashing or erroring, it was working exactly as instructed, the instructions themselves just implicitly encouraged the LLM to always find something. Worth remembering: an LLM asked to review something for problems will often manufacture one rather than say "this looks fine," has to be explicitly told that a clean result is a valid, expected answer.
+
+---
+
+## What's built, mapped to both weeks' requirements
+
+**Week 4:** research/review agent with a web-search skill (Tavily), memory (ChromaDB, seeded from 5 real security lessons, semantically verified to discriminate between bug types), a hook logging every tool call with timestamps, a file-read plugin (scanner + agent loop reading and reasoning over real source files), and a multi-hop demo (scan finds nothing on the IDOR file, falls back to logic review, checks memory, checks web, produces a synthesized fix, all chained in one review).
+
+**Week 5:** MCP server exposing review_code as one tool over stdio, connected to and tested through Cursor, internal logic split into a Supervisor routing to a MemoryWorker and WebResearchWorker, and a tracing layer showing which agent made each tool call across the hand-offs.
