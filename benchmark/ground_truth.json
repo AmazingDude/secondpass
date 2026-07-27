@@ -1,0 +1,21 @@
+{
+  "version": "1",
+  "description": "secondpass detection-quality benchmark ground truth",
+  "fixtures": {
+    "benchmark/fixtures/notes_idor.py": [
+      {
+        "finding_type": "missing_ownership_check",
+        "symbol": "get_note",
+        "line": 12
+      }
+    ],
+    "benchmark/fixtures/ops_shell.py": [
+      {
+        "finding_type": "command_injection",
+        "symbol": "run_backup",
+        "line": 10
+      }
+    ],
+    "benchmark/fixtures/clean_ownership.py": []
+  }
+}
