@@ -1,6 +1,8 @@
 chromadb
 mcp>=1.0,<2
 openai
+pydantic>=2
+pytest
 python-dotenv
 rich
 semgrep
