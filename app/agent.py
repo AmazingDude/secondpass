@@ -18,6 +18,7 @@ from app.scanner import ScanError, run_static_scan
 from app.schema import Finding as StructuredFinding
 from app.schema import ReviewResult
 from app.supervisor import supervise_finding
+from app.workers.architecture_worker import run_architecture_worker
 from app.workers.common import extract_json_object
 
 StageCallback = Callable[[str], None]
@@ -561,4 +562,134 @@ def review_changed_files(
             accepted,
             needs_review,
         ),
+    }
+
+
+def build_architecture_review_output(
+    target: str,
+    structured_findings: list[StructuredFinding],
+    *,
+    timestamp: datetime | None = None,
+) -> tuple[ReviewResult, GateResult]:
+    """Wrap Architecture Worker findings into a schema-valid ReviewResult + gate."""
+    review_result = ReviewResult(
+        findings=structured_findings,
+        file_path=target,
+        timestamp=timestamp or datetime.now(timezone.utc),
+        worker_name="architecture",
+    )
+    gate_result = apply_confidence_gate(review_result)
+    return review_result, gate_result
+
+
+def _architecture_report_item(
+    finding: StructuredFinding,
+    assessment: dict[str, Any],
+) -> dict[str, Any]:
+    """Shape one Architecture finding to match the CLI's existing render helpers."""
+    return {
+        "finding": {
+            "rule_id": finding.finding_type,
+            "severity": "WARNING",
+            "path": "",
+            "line": 0,
+            "message": finding.evidence,
+            "snippet": finding.evidence,
+        },
+        "structured_finding": finding.model_dump(mode="json"),
+        "explanation": str(assessment.get("summary") or ""),
+        "suggested_fix": finding.suggested_fix,
+        "memory_match": None,
+        "web_context": [],
+        "saved_lesson_id": None,
+    }
+
+
+def review_architecture(
+    path: str,
+    *,
+    project_root: str | None = None,
+    on_stage: StageCallback | None = None,
+) -> dict[str, Any]:
+    """Cross-file architecture/conventions review for one file; returns a report.
+
+    v1 only supports a single file (cross-file context is gathered around one
+    target); a directory is reported as skipped rather than erroring.
+    """
+    target = str(Path(path).resolve())
+
+    if Path(target).is_dir():
+        review_result, gate_result = build_architecture_review_output(target, [])
+        return {
+            "path": target,
+            "worker_name": "architecture",
+            "finding_count": 0,
+            "no_issues": True,
+            "skipped": True,
+            "message": (
+                "Architecture review skipped: v1 cross-file context supports a "
+                "single file, not a directory."
+            ),
+            "context_files": [],
+            "tool_call_failures": 0,
+            **_structured_report_fields(review_result, gate_result, [], []),
+        }
+
+    _emit_stage(on_stage, "architecture_review")
+    assessment = run_architecture_worker(target, project_root=project_root)
+    failures = int(assessment.get("failures") or 0)
+    structured_findings: list[StructuredFinding] = list(
+        assessment.get("structured_findings") or []
+    )
+
+    review_result, gate_result = build_architecture_review_output(
+        target, structured_findings
+    )
+    items = [
+        _architecture_report_item(finding, assessment) for finding in structured_findings
+    ]
+    accepted: list[dict[str, Any]] = []
+    needs_review: list[dict[str, Any]] = []
+    for item, finding in zip(items, structured_findings):
+        bucket = (
+            accepted if finding.confidence >= gate_result.threshold else needs_review
+        )
+        bucket.append(item)
+
+    _emit_stage(on_stage, "building_report")
+    return {
+        "path": target,
+        "worker_name": "architecture",
+        "finding_count": len(structured_findings),
+        "no_issues": len(structured_findings) == 0,
+        "message": assessment.get("summary") if not structured_findings else None,
+        "context_files": assessment.get("context_files") or [],
+        "tool_call_failures": failures,
+        **_structured_report_fields(
+            review_result,
+            gate_result,
+            accepted,
+            needs_review,
+        ),
+    }
+
+
+def review_path(
+    path: str,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
+    *,
+    on_stage: StageCallback | None = None,
+) -> dict[str, Any]:
+    """Run Security + Architecture reviews for one path.
+
+    Both workers conceptually sit under one Supervisor per the PRD; here they
+    run sequentially (hand-rolled, no shared orchestration object yet).
+    Architecture only reviews single files today — see review_architecture.
+    """
+    security_report = review_code(path, max_iterations=max_iterations, on_stage=on_stage)
+    architecture_report = review_architecture(path, on_stage=on_stage)
+    return {
+        "path": security_report.get("path", path),
+        "security": security_report,
+        "architecture": architecture_report,
     }

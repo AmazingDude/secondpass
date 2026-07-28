@@ -14,6 +14,7 @@ STAGE_LABELS: dict[str, str] = {
     "scanning": "[cyan]Scanning with Semgrep…[/cyan]",
     "logic_review": "[yellow]Running logic review…[/yellow]",
     "workers": "[magenta]Routing findings to workers…[/magenta]",
+    "architecture_review": "[blue]Running architecture review…[/blue]",
     "building_report": "[green]Building report…[/green]",
 }
 

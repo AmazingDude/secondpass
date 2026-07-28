@@ -12,7 +12,7 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from app.agent import review_changed_files, review_code
+from app.agent import review_architecture, review_changed_files, review_code
 from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
 from app.progress import ReviewProgress
@@ -289,6 +289,87 @@ def _display_finding_bucket(
             )
 
 
+def _render_architecture_finding(item: dict[str, Any]) -> Panel:
+    structured = item.get("structured_finding") or {}
+    body = Text()
+    body.append("Type: ", style="bold")
+    body.append(f"{structured.get('finding_type', '')}\n")
+    body.append("Confidence: ", style="bold")
+    body.append(f"{structured.get('confidence', 'n/a')}%\n\n")
+    body.append("Evidence\n", style="bold cyan")
+    body.append(f"{structured.get('evidence', '') or '(none)'}\n\n")
+    body.append("Suggested fix\n", style="bold green")
+    body.append(str(structured.get("suggested_fix", "") or "(none)"))
+    return Panel(body, title="Architecture finding", border_style="cyan", padding=(1, 2))
+
+
+def _display_architecture_report(report: dict[str, Any]) -> None:
+    console.print()
+    header = Text()
+    header.append("Architecture review\n", style="bold")
+    header.append(f"Path: {report.get('path', '')}\n")
+    header.append(f"Findings reviewed: {report.get('finding_count', 0)}")
+    header.append(f"\nAccepted: {report.get('accepted_count', 0)}", style="green")
+    header.append(
+        f"  Needs your review: {report.get('needs_review_count', 0)}",
+        style="yellow",
+    )
+    if report.get("gate_threshold") is not None:
+        header.append(f"  Gate: ≥{report['gate_threshold']}%", style="dim")
+    context_files = report.get("context_files") or []
+    if context_files:
+        header.append(
+            f"\nCross-file context: {len(context_files)} related file(s)",
+            style="dim",
+        )
+    console.print(Panel.fit(header, border_style="white"))
+
+    if report.get("skipped"):
+        console.print(
+            Panel(
+                Text(str(report.get("message") or ""), style="yellow"),
+                title="Architecture review skipped",
+                border_style="yellow",
+                padding=(1, 2),
+            )
+        )
+        return
+
+    accepted = report.get("accepted") or []
+    needs_review = report.get("needs_review") or []
+    if not accepted and not needs_review:
+        console.print()
+        console.print(
+            Panel(
+                Text(
+                    str(report.get("message") or "No architecture issues found."),
+                    style="green",
+                ),
+                title="No issues found",
+                border_style="green",
+                padding=(1, 2),
+            )
+        )
+        return
+
+    for label, bucket, style in (
+        ("Accepted finding", accepted, "green"),
+        ("Needs your review", needs_review, "yellow"),
+    ):
+        for index, item in enumerate(bucket, start=1):
+            structured = item.get("structured_finding") or {}
+            console.print()
+            console.print(
+                Rule(
+                    f"{label} {index}/{len(bucket)} — "
+                    f"{structured.get('finding_type', 'unknown')} "
+                    f"({structured.get('confidence', 'n/a')}% confidence)",
+                    style=style,
+                )
+            )
+            console.print(_render_architecture_finding(item))
+
+
 @app.command()
 def review(
     path: Path | None = typer.Argument(
@@ -322,6 +403,7 @@ def review(
         )
         raise typer.Exit(code=1)
 
+    architecture_report: dict[str, Any] | None = None
     try:
         if diff:
             selection = collect_diff_selection()
@@ -365,6 +447,7 @@ def review(
             )
             with ReviewProgress(console) as on_stage:
                 report = review_code(str(path), on_stage=on_stage)
+                architecture_report = review_architecture(str(path), on_stage=on_stage)
     except (ScanError, GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
@@ -373,6 +456,8 @@ def review(
         raise typer.Exit(code=1) from exc
 
     _display_report(report)
+    if architecture_report is not None:
+        _display_architecture_report(architecture_report)
 
 
 @app.command("search-memory")
