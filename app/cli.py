@@ -15,6 +15,7 @@ from rich.text import Text
 from app.agent import review_changed_files, review_code
 from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
+from app.progress import ReviewProgress
 from app.scanner import ScanError
 from app.websearch import search_web
 
@@ -295,22 +296,26 @@ def review(
                 f"([cyan]{selection.mode}[/cyan], "
                 f"{len(selection.files)} file(s))\n"
                 "[dim]Whole files are scanned for context; only findings on "
-                "changed lines are reported. Tool calls stream below...[/dim]\n"
+                "changed lines are reported. Progress updates below; "
+                "tool traces go to stderr.[/dim]\n"
             )
             for changed in selection.files:
                 ranges = ", ".join(f"{start}-{end}" for start, end in changed.ranges) or "n/a"
                 console.print(f"  • {changed.path}  [dim]lines {ranges}[/dim]")
             console.print()
-            report = review_changed_files(
-                selection.files,
-                mode=selection.mode,
-            )
+            with ReviewProgress(console) as on_stage:
+                report = review_changed_files(
+                    selection.files,
+                    mode=selection.mode,
+                    on_stage=on_stage,
+                )
         else:
             console.print(
                 f"[bold]Starting review of[/bold] {path}\n"
-                "[dim]Tool calls will stream below as the agent works...[/dim]\n"
+                "[dim]Stage progress below; tool traces go to stderr.[/dim]\n"
             )
-            report = review_code(str(path))
+            with ReviewProgress(console) as on_stage:
+                report = review_code(str(path), on_stage=on_stage)
     except (ScanError, GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc

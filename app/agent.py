@@ -2,8 +2,8 @@
 
 from __future__ import annotations
 
-import json
 import os
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +14,8 @@ from app.memory import seed_memory
 from app.scanner import Finding, ScanError, run_static_scan
 from app.supervisor import supervise_finding
 from app.workers.common import extract_json_object
+
+StageCallback = Callable[[str], None]
 
 MAX_TOOL_ITERATIONS = 6
 _MAX_LOGIC_SOURCE_CHARS = 12000
@@ -223,13 +225,24 @@ def _empty_report(
     }
 
 
-def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[str, Any]:
+def _emit_stage(on_stage: StageCallback | None, stage: str) -> None:
+    if on_stage is not None:
+        on_stage(stage)
+
+
+def review_code(
+    path: str,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
+    *,
+    on_stage: StageCallback | None = None,
+) -> dict[str, Any]:
     """Run scan + multi-agent review over a path; return a structured report."""
     target = str(Path(path).resolve())
     seed_memory()
 
     scan_error: str | None = None
     findings: list[Finding] = []
+    _emit_stage(on_stage, "scanning")
     with agent_scope("supervisor"):
         log_agent_event(f"supervisor starting review of {target}")
         try:
@@ -246,6 +259,7 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
 
     if scan_empty and _source_is_reviewable(target):
         used_logic_fallback = True
+        _emit_stage(on_stage, "logic_review")
         scan_note = (
             f"Static scan unavailable ({scan_error}). Review the source carefully."
             if scan_error
@@ -255,6 +269,7 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
         logic_failures = int(assessment.get("failures") or 0)
         logic_summary = str(assessment.get("summary") or "")
         if not assessment.get("has_issues"):
+            _emit_stage(on_stage, "building_report")
             return _empty_report(
                 target,
                 scan_error=scan_error,
@@ -265,10 +280,13 @@ def review_code(path: str, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[st
             )
         findings = list(assessment.get("findings") or [])
 
+    if findings:
+        _emit_stage(on_stage, "workers")
     reviewed = [
         _review_finding(finding, max_iterations=max_iterations) for finding in findings
     ]
 
+    _emit_stage(on_stage, "building_report")
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -294,6 +312,7 @@ def review_changed_files(
     *,
     max_iterations: int = MAX_TOOL_ITERATIONS,
     mode: str = "staged",
+    on_stage: StageCallback | None = None,
 ) -> dict[str, Any]:
     """Review whole changed files, then keep findings that fall in diff hunks."""
     files = list(changed_files)
@@ -308,7 +327,11 @@ def review_changed_files(
     failures = 0
 
     for changed in files:
-        report = review_code(str(changed.path), max_iterations=max_iterations)
+        report = review_code(
+            str(changed.path),
+            max_iterations=max_iterations,
+            on_stage=on_stage,
+        )
         failures += int(report.get("tool_call_failures") or 0)
         if report.get("static_scan_error"):
             scan_errors.append(f"{changed.path}: {report['static_scan_error']}")
@@ -330,6 +353,7 @@ def review_changed_files(
             else:
                 filtered_out += 1
 
+    _emit_stage(on_stage, "building_report")
     no_issues = len(combined) == 0
     message = None
     if no_issues:
