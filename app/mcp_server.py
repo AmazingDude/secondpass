@@ -58,10 +58,10 @@ def review_code_tool(
 
     This call is slow (often 30–120 seconds). Prefer a single file path for tests.
 
-    Returns JSON with finding_count, findings[] (scan detail, memory_match,
-    web_context, explanation, suggested_fix), and metadata (provider, etc.).
-    When the review concludes cleanly, finding_count is 0, findings is [],
-    no_issues is true, and message explains that no issues were found.
+    Returns JSON with ReviewResult + GateResult, accepted[] and needs_review[]
+    enriched with scan detail, memory/web context, explanation and suggested fix,
+    plus provider metadata. ``findings`` remains an alias for accepted findings.
+    A clean review has finding_count=0, empty buckets, and no_issues=true.
     """
     # Lazy-import heavy deps so server startup / list_tools stays fast.
     from app.agent import review_changed_files, review_code

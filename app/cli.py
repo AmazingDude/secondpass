@@ -34,7 +34,14 @@ def main() -> None:
 
 def _render_scan_detail(finding: dict[str, Any]) -> Panel:
     scan = finding.get("finding") or {}
+    structured = finding.get("structured_finding") or {}
     body = Text()
+    body.append("Type: ", style="bold")
+    body.append(f"{structured.get('finding_type', scan.get('rule_id', ''))}\n")
+    body.append("Detection: ", style="bold")
+    body.append(f"{structured.get('detection_method', 'unknown')}\n")
+    body.append("Confidence: ", style="bold")
+    body.append(f"{structured.get('confidence', 'n/a')}%\n")
     body.append("Rule: ", style="bold")
     body.append(f"{scan.get('rule_id', '')}\n")
     body.append("Severity: ", style="bold")
@@ -116,8 +123,16 @@ def _render_web_context(finding: dict[str, Any]) -> Panel:
 
 
 def _render_llm_analysis(finding: dict[str, Any]) -> Panel:
+    structured = finding.get("structured_finding") or {}
     explanation = str(finding.get("explanation") or "").strip() or "(none)"
-    suggested_fix = str(finding.get("suggested_fix") or "").strip() or "(none)"
+    suggested_fix = (
+        str(
+            structured.get("suggested_fix")
+            or finding.get("suggested_fix")
+            or ""
+        ).strip()
+        or "(none)"
+    )
     body = Text()
     body.append("Explanation\n", style="bold green")
     body.append(f"{explanation}\n\n")
@@ -140,6 +155,16 @@ def _display_report(report: dict[str, Any]) -> None:
     if report.get("model"):
         header.append(f"  Model: {report['model']}")
     header.append(f"\nFindings reviewed: {report.get('finding_count', 0)}")
+    header.append(
+        f"\nAccepted: {report.get('accepted_count', 0)}",
+        style="green",
+    )
+    header.append(
+        f"  Needs your review: {report.get('needs_review_count', 0)}",
+        style="yellow",
+    )
+    if report.get("gate_threshold") is not None:
+        header.append(f"  Gate: ≥{report['gate_threshold']}%", style="dim")
     if report.get("diff_mode"):
         header.append(f"\nDiff mode: {report['diff_mode']}")
         changed = report.get("changed_files") or []
@@ -170,8 +195,11 @@ def _display_report(report: dict[str, Any]) -> None:
 
     console.print(Panel.fit(header, border_style="white"))
 
-    findings = report.get("findings") or []
-    if not findings:
+    accepted = report.get("accepted")
+    if accepted is None:
+        accepted = report.get("findings") or []
+    needs_review = report.get("needs_review") or []
+    if not accepted and not needs_review:
         console.print()
         if report.get("diff_mode"):
             filtered_out = int(report.get("filtered_out_findings") or 0)
@@ -213,14 +241,42 @@ def _display_report(report: dict[str, Any]) -> None:
             )
         return
 
+    _display_finding_bucket(
+        accepted,
+        label="Accepted finding",
+        rule_style="green",
+    )
+    _display_finding_bucket(
+        needs_review,
+        label="Needs your review",
+        rule_style="yellow",
+    )
+
+    failures = int(report.get("tool_call_failures") or 0)
+    if failures:
+        console.print(
+            f"\n[yellow]Note:[/yellow] {failures} tool-call formatting "
+            "failure(s) were retried during this run."
+        )
+
+
+def _display_finding_bucket(
+    findings: list[dict[str, Any]],
+    *,
+    label: str,
+    rule_style: str,
+) -> None:
     for index, item in enumerate(findings, start=1):
         scan = item.get("finding") or {}
+        structured = item.get("structured_finding") or {}
+        confidence = structured.get("confidence", "n/a")
         console.print()
         console.print(
             Rule(
-                f"Finding {index}/{len(findings)} — "
-                f"{scan.get('rule_id', 'unknown')} "
-                f"({scan.get('severity', 'n/a')})"
+                f"{label} {index}/{len(findings)} — "
+                f"{structured.get('finding_type', scan.get('rule_id', 'unknown'))} "
+                f"({confidence}% confidence)",
+                style=rule_style,
             )
         )
         console.print(_render_scan_detail(item))
@@ -231,13 +287,6 @@ def _display_report(report: dict[str, Any]) -> None:
             console.print(
                 f"[green]Saved new lesson:[/green] {item['saved_lesson_id']}"
             )
-
-    failures = int(report.get("tool_call_failures") or 0)
-    if failures:
-        console.print(
-            f"\n[yellow]Note:[/yellow] {failures} tool-call formatting "
-            "failure(s) were retried during this run."
-        )
 
 
 @app.command()

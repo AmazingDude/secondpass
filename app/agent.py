@@ -4,14 +4,19 @@ from __future__ import annotations
 
 import os
 from collections.abc import Callable
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from app.confidence_gate import GateResult, apply_confidence_gate
 from app.gitdiff import ChangedFile, finding_in_changed_lines
 from app.hooks import agent_scope, log_agent_event
 from app.llm import chat
 from app.memory import seed_memory
-from app.scanner import Finding, ScanError, run_static_scan
+from app.scanner import Finding as ScannerFinding
+from app.scanner import ScanError, run_static_scan
+from app.schema import Finding as StructuredFinding
+from app.schema import ReviewResult
 from app.supervisor import supervise_finding
 from app.workers.common import extract_json_object
 
@@ -19,6 +24,7 @@ StageCallback = Callable[[str], None]
 
 MAX_TOOL_ITERATIONS = 6
 _MAX_LOGIC_SOURCE_CHARS = 12000
+_STATIC_RULE_CONFIDENCE = 90
 
 _LOGIC_ASSESS_SYSTEM = """\
 You are a careful security logic reviewer for secondpass. Semgrep reported no
@@ -43,8 +49,11 @@ Respond with ONLY JSON (no markdown):
     {
       "line": 1,
       "severity": "WARNING",
+      "finding_type": "missing_ownership_check",
+      "confidence": 85,
       "message": "specific description of the concrete bug",
-      "snippet": "short relevant code excerpt"
+      "snippet": "short relevant code excerpt",
+      "suggested_fix": "specific remediation"
     }
   ]
 }
@@ -57,7 +66,7 @@ def _logic_finding_from_issue(
     issue: dict[str, Any],
     *,
     fallback_snippet: str,
-) -> Finding:
+) -> ScannerFinding:
     """Convert one assessed logic issue into a Finding for the supervisor."""
     snippet = str(issue.get("snippet") or "").strip() or fallback_snippet
     if len(snippet) > 2000:
@@ -79,6 +88,64 @@ def _logic_finding_from_issue(
         "message": message,
         "snippet": snippet,
     }
+
+
+def _bounded_confidence(value: Any, *, default: int) -> int:
+    try:
+        confidence = int(value)
+    except (TypeError, ValueError):
+        confidence = default
+    return max(0, min(100, confidence))
+
+
+def _finding_evidence(finding: ScannerFinding) -> str:
+    location = f"{finding.get('path', '')}:{finding.get('line', 0)}"
+    message = str(finding.get("message") or "").strip()
+    snippet = str(finding.get("snippet") or "").strip()
+    parts = [location]
+    if message:
+        parts.append(message)
+    if snippet:
+        parts.append(snippet)
+    return "\n".join(parts)
+
+
+def map_semgrep_finding(finding: ScannerFinding) -> StructuredFinding:
+    """Map a scanner-internal Semgrep finding to the shared Phase 3 schema."""
+    rule_id = str(finding.get("rule_id") or "").strip()
+    return StructuredFinding(
+        finding_type=rule_id or "static_rule_match",
+        evidence=_finding_evidence(finding),
+        confidence=_STATIC_RULE_CONFIDENCE,
+        suggested_fix="Review and remediate the matched static-analysis rule.",
+        detection_method="static_rule",
+    )
+
+
+def map_logic_issue(
+    path: str,
+    issue: dict[str, Any],
+    *,
+    fallback_snippet: str,
+) -> StructuredFinding:
+    """Map one logic-review issue to the shared Phase 3 schema."""
+    scanner_finding = _logic_finding_from_issue(
+        path,
+        issue,
+        fallback_snippet=fallback_snippet,
+    )
+    finding_type = str(issue.get("finding_type") or "").strip()
+    suggested_fix = str(issue.get("suggested_fix") or "").strip()
+    return StructuredFinding(
+        finding_type=finding_type or "logic_security_issue",
+        evidence=_finding_evidence(scanner_finding),
+        confidence=_bounded_confidence(issue.get("confidence"), default=70),
+        suggested_fix=(
+            suggested_fix
+            or "Add the missing security control described by the logic finding."
+        ),
+        detection_method="llm_reasoning",
+    )
 
 
 def _source_is_reviewable(path: str) -> bool:
@@ -144,6 +211,7 @@ def assess_logic_review(
                     "Logic review could not complete; no concrete issue confirmed."
                 ),
                 "findings": [],
+                "structured_findings": [],
                 "failures": failures,
             }
 
@@ -153,7 +221,8 @@ def assess_logic_review(
         summary = str(parsed.get("summary") or "").strip()
         raw_issues = parsed.get("issues") if isinstance(parsed.get("issues"), list) else []
 
-        findings: list[Finding] = []
+        findings: list[ScannerFinding] = []
+        structured_findings: list[StructuredFinding] = []
         if has_issues:
             for issue in raw_issues:
                 if not isinstance(issue, dict):
@@ -161,11 +230,15 @@ def assess_logic_review(
                 message = str(issue.get("message") or "").strip()
                 if not message:
                     continue
+                fallback_snippet = source.strip()[:2000]
                 findings.append(
                     _logic_finding_from_issue(
-                        path,
-                        issue,
-                        fallback_snippet=source.strip()[:2000],
+                        path, issue, fallback_snippet=fallback_snippet
+                    )
+                )
+                structured_findings.append(
+                    map_logic_issue(
+                        path, issue, fallback_snippet=fallback_snippet
                     )
                 )
 
@@ -184,6 +257,7 @@ def assess_logic_review(
                 "has_issues": False,
                 "summary": summary,
                 "findings": [],
+                "structured_findings": [],
                 "failures": failures,
             }
 
@@ -192,13 +266,81 @@ def assess_logic_review(
             "has_issues": True,
             "summary": summary or f"{len(findings)} logic issue(s) identified",
             "findings": findings,
+            "structured_findings": structured_findings,
             "failures": failures,
         }
 
 
-def _review_finding(finding: Finding, max_iterations: int = MAX_TOOL_ITERATIONS) -> dict[str, Any]:
+def _review_finding(
+    finding: ScannerFinding,
+    max_iterations: int = MAX_TOOL_ITERATIONS,
+) -> dict[str, Any]:
     """Hand one finding to the supervisor → workers pipeline."""
     return supervise_finding(dict(finding), max_iterations=max_iterations)
+
+
+def build_security_review_output(
+    target: str,
+    reviewed: list[dict[str, Any]],
+    structured_findings: list[StructuredFinding],
+    *,
+    timestamp: datetime | None = None,
+) -> tuple[ReviewResult, GateResult, list[dict[str, Any]], list[dict[str, Any]]]:
+    """Attach structured findings and gate the worker-enriched review items."""
+    if len(reviewed) != len(structured_findings):
+        raise ValueError("Reviewed and structured finding counts must match.")
+
+    enriched: list[dict[str, Any]] = []
+    finalized_findings: list[StructuredFinding] = []
+    for item, structured in zip(reviewed, structured_findings):
+        supervisor_fix = str(item.get("suggested_fix") or "").strip()
+        finalized = (
+            structured.model_copy(update={"suggested_fix": supervisor_fix})
+            if supervisor_fix
+            else structured
+        )
+        finalized_findings.append(finalized)
+        enriched_item = dict(item)
+        enriched_item["structured_finding"] = finalized.model_dump(mode="json")
+        enriched.append(enriched_item)
+
+    review_result = ReviewResult(
+        findings=finalized_findings,
+        file_path=target,
+        timestamp=timestamp or datetime.now(timezone.utc),
+        worker_name="security",
+    )
+    gate_result = apply_confidence_gate(review_result)
+    accepted: list[dict[str, Any]] = []
+    needs_review: list[dict[str, Any]] = []
+    for item, finding in zip(enriched, finalized_findings):
+        bucket = (
+            accepted
+            if finding.confidence >= gate_result.threshold
+            else needs_review
+        )
+        bucket.append(item)
+
+    return review_result, gate_result, accepted, needs_review
+
+
+def _structured_report_fields(
+    review_result: ReviewResult,
+    gate_result: GateResult,
+    accepted: list[dict[str, Any]],
+    needs_review: list[dict[str, Any]],
+) -> dict[str, Any]:
+    return {
+        "review_result": review_result.model_dump(mode="json"),
+        "gate_result": gate_result.model_dump(mode="json"),
+        "gate_threshold": gate_result.threshold,
+        "accepted_count": len(accepted),
+        "needs_review_count": len(needs_review),
+        "accepted": accepted,
+        "needs_review": needs_review,
+        "findings": accepted,
+        "all_findings": [*accepted, *needs_review],
+    }
 
 
 def _empty_report(
@@ -210,6 +352,11 @@ def _empty_report(
     message: str,
     tool_call_failures: int = 0,
 ) -> dict[str, Any]:
+    review_result, gate_result, accepted, needs_review = build_security_review_output(
+        target,
+        [],
+        [],
+    )
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -221,7 +368,12 @@ def _empty_report(
         "no_issues": True,
         "message": message,
         "tool_call_failures": tool_call_failures,
-        "findings": [],
+        **_structured_report_fields(
+            review_result,
+            gate_result,
+            accepted,
+            needs_review,
+        ),
     }
 
 
@@ -241,7 +393,7 @@ def review_code(
     seed_memory()
 
     scan_error: str | None = None
-    findings: list[Finding] = []
+    findings: list[ScannerFinding] = []
     _emit_stage(on_stage, "scanning")
     with agent_scope("supervisor"):
         log_agent_event(f"supervisor starting review of {target}")
@@ -253,6 +405,7 @@ def review_code(
             log_agent_event(f"supervisor scan error: {scan_error}")
 
     scan_empty = not findings
+    structured_findings = [map_semgrep_finding(finding) for finding in findings]
     used_logic_fallback = False
     logic_failures = 0
     logic_summary: str | None = None
@@ -279,6 +432,7 @@ def review_code(
                 tool_call_failures=logic_failures,
             )
         findings = list(assessment.get("findings") or [])
+        structured_findings = list(assessment.get("structured_findings") or [])
 
     if findings:
         _emit_stage(on_stage, "workers")
@@ -287,6 +441,11 @@ def review_code(
     ]
 
     _emit_stage(on_stage, "building_report")
+    review_result, gate_result, accepted, needs_review = build_security_review_output(
+        target,
+        reviewed,
+        structured_findings,
+    )
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -303,7 +462,12 @@ def review_code(
         ),
         "tool_call_failures": logic_failures
         + sum(int(item.get("tool_call_failures") or 0) for item in reviewed),
-        "findings": reviewed,
+        **_structured_report_fields(
+            review_result,
+            gate_result,
+            accepted,
+            needs_review,
+        ),
     }
 
 
@@ -342,7 +506,7 @@ def review_changed_files(
         if report.get("no_issues") and report.get("message"):
             clean_messages.append(f"{changed.path}: {report['message']}")
 
-        for item in report.get("findings") or []:
+        for item in report.get("all_findings") or []:
             finding = item.get("finding") or {}
             line = int(finding.get("line") or 0)
             rule_id = str(finding.get("rule_id") or "")
@@ -352,6 +516,16 @@ def review_changed_files(
                 combined.append(enriched)
             else:
                 filtered_out += 1
+
+    combined_structured = [
+        StructuredFinding.model_validate(item["structured_finding"])
+        for item in combined
+    ]
+    review_result, gate_result, accepted, needs_review = build_security_review_output(
+        f"git diff ({mode})",
+        combined,
+        combined_structured,
+    )
 
     _emit_stage(on_stage, "building_report")
     no_issues = len(combined) == 0
@@ -381,5 +555,10 @@ def review_changed_files(
         "diff_mode": mode,
         "changed_files": [str(item.path) for item in files],
         "filtered_out_findings": filtered_out,
-        "findings": combined,
+        **_structured_report_fields(
+            review_result,
+            gate_result,
+            accepted,
+            needs_review,
+        ),
     }
