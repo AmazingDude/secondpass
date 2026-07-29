@@ -317,4 +317,4 @@ secondpass/
 
 ## License
 
-Use and adapt freely for personal or team workflows. Add a license file if you publish this publicly.
+[MIT](LICENSE) — use, modify, and share freely.
