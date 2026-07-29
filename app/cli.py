@@ -12,11 +12,12 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from app.agent import review_architecture, review_changed_files, review_code
+from app.agent import review_changed_files
 from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
 from app.progress import ReviewProgress
 from app.scanner import ScanError
+from app.supervisor import supervise_review
 from app.websearch import search_web
 
 app = typer.Typer(
@@ -370,6 +371,38 @@ def _display_architecture_report(report: dict[str, Any]) -> None:
             console.print(_render_architecture_finding(item))
 
 
+def _display_combined_summary(report: dict[str, Any]) -> None:
+    summary = report.get("summary") or {}
+    header = Text()
+    header.append("secondpass supervisor\n", style="bold")
+    header.append(f"Path: {report.get('path', '')}\n")
+    workers = summary.get("workers_run") or []
+    header.append(f"Workers: {', '.join(workers) or 'none'}\n")
+    header.append(
+        f"Overall accepted: {summary.get('accepted_count', 0)}",
+        style="green",
+    )
+    header.append(
+        f"  Needs your review: {summary.get('needs_review_count', 0)}",
+        style="yellow",
+    )
+    if summary.get("gate_threshold") is not None:
+        header.append(f"  Gate: ≥{summary['gate_threshold']}%", style="dim")
+    header.append(
+        f"\nSecurity: {summary.get('security_accepted', 0)} accepted / "
+        f"{summary.get('security_needs_review', 0)} needs review"
+    )
+    if summary.get("architecture_skipped"):
+        header.append("\nArchitecture: skipped", style="dim")
+    else:
+        header.append(
+            f"\nArchitecture: {summary.get('architecture_accepted', 0)} accepted / "
+            f"{summary.get('architecture_needs_review', 0)} needs review"
+        )
+    console.print()
+    console.print(Panel.fit(header, border_style="white"))
+
+
 @app.command()
 def review(
     path: Path | None = typer.Argument(
@@ -403,7 +436,8 @@ def review(
         )
         raise typer.Exit(code=1)
 
-    architecture_report: dict[str, Any] | None = None
+    combined_report: dict[str, Any] | None = None
+    security_report: dict[str, Any] | None = None
     try:
         if diff:
             selection = collect_diff_selection()
@@ -428,14 +462,15 @@ def review(
                 f"{len(selection.files)} file(s))\n"
                 "[dim]Whole files are scanned for context; only findings on "
                 "changed lines are reported. Progress updates below; "
-                "tool traces go to stderr.[/dim]\n"
+                "tool traces go to stderr. Architecture is Security-only "
+                "in --diff mode.[/dim]\n"
             )
             for changed in selection.files:
                 ranges = ", ".join(f"{start}-{end}" for start, end in changed.ranges) or "n/a"
                 console.print(f"  • {changed.path}  [dim]lines {ranges}[/dim]")
             console.print()
             with ReviewProgress(console) as on_stage:
-                report = review_changed_files(
+                security_report = review_changed_files(
                     selection.files,
                     mode=selection.mode,
                     on_stage=on_stage,
@@ -443,11 +478,11 @@ def review(
         else:
             console.print(
                 f"[bold]Starting review of[/bold] {path}\n"
-                "[dim]Stage progress below; tool traces go to stderr.[/dim]\n"
+                "[dim]Supervisor runs Security then Architecture; "
+                "stage progress below; tool traces go to stderr.[/dim]\n"
             )
             with ReviewProgress(console) as on_stage:
-                report = review_code(str(path), on_stage=on_stage)
-                architecture_report = review_architecture(str(path), on_stage=on_stage)
+                combined_report = supervise_review(str(path), on_stage=on_stage)
     except (ScanError, GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
@@ -455,9 +490,14 @@ def review(
         console.print(f"[bold red]Review failed:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
 
-    _display_report(report)
-    if architecture_report is not None:
-        _display_architecture_report(architecture_report)
+    if combined_report is not None:
+        _display_combined_summary(combined_report)
+        _display_report(combined_report.get("security") or {})
+        architecture = combined_report.get("architecture")
+        if architecture is not None:
+            _display_architecture_report(architecture)
+    elif security_report is not None:
+        _display_report(security_report)
 
 
 @app.command("search-memory")

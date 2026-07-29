@@ -146,6 +146,10 @@ def test_review_path_combines_security_and_architecture(
 
     report = review_path(str(target))
 
-    assert set(report.keys()) == {"path", "security", "architecture"}
+    assert set(report.keys()) == {"path", "security", "architecture", "summary"}
     assert report["security"]["review_result"]["worker_name"] == "security"
     assert report["architecture"]["worker_name"] == "architecture"
+    assert report["summary"]["workers_run"] == ["security", "architecture"]
+    assert report["summary"]["no_issues"] is True
+    assert report["summary"]["accepted_count"] == 0
+    assert report["summary"]["needs_review_count"] == 0

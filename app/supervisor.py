@@ -1,14 +1,18 @@
-"""Supervisor — routes findings to workers and synthesizes the final report."""
+"""Supervisor — finding-level Memory/Web routing + path-level worker aggregation."""
 
 from __future__ import annotations
 
 import json
+from collections.abc import Callable
+from pathlib import Path
 from typing import Any
 
 from app.hooks import agent_scope, log_agent_event
 from app.llm import chat
 from app.memory import save_finding
 from app.workers.common import extract_json_object, run_tool_loop
+
+StageCallback = Callable[[str], None]
 from app.workers.memory_worker import run_memory_worker
 from app.workers.web_worker import run_web_worker
 
@@ -306,3 +310,130 @@ def supervise_finding(
         "memory_worker": memory_result,
         "web_worker": web_result,
     }
+
+
+def _count(report: dict[str, Any] | None, key: str) -> int:
+    if not report:
+        return 0
+    if key in report and report[key] is not None:
+        try:
+            return int(report[key])
+        except (TypeError, ValueError):
+            pass
+    bucket = report.get(key.replace("_count", "")) if key.endswith("_count") else None
+    if isinstance(bucket, list):
+        return len(bucket)
+    return 0
+
+
+def aggregate_worker_reports(
+    security: dict[str, Any],
+    architecture: dict[str, Any] | None = None,
+    *,
+    path: str | None = None,
+) -> dict[str, Any]:
+    """Merge Security + Architecture worker reports into one Supervisor result.
+
+    Preserves each worker's schema/gate fields intact. Summary counts are
+    derived from accepted / needs_review buckets (or their *_count fields).
+    """
+    security_report = dict(security or {})
+    architecture_report = dict(architecture) if architecture is not None else None
+
+    sec_accepted = _count(security_report, "accepted_count")
+    sec_needs = _count(security_report, "needs_review_count")
+    if architecture_report is None:
+        arch_accepted = 0
+        arch_needs = 0
+        arch_skipped = True
+        workers_run = ["security"]
+    else:
+        arch_accepted = _count(architecture_report, "accepted_count")
+        arch_needs = _count(architecture_report, "needs_review_count")
+        arch_skipped = bool(architecture_report.get("skipped"))
+        workers_run = ["security", "architecture"]
+
+    overall_accepted = sec_accepted + arch_accepted
+    overall_needs = sec_needs + arch_needs
+    tool_failures = int(security_report.get("tool_call_failures") or 0) + int(
+        (architecture_report or {}).get("tool_call_failures") or 0
+    )
+
+    summary = {
+        "security_accepted": sec_accepted,
+        "security_needs_review": sec_needs,
+        "architecture_accepted": arch_accepted,
+        "architecture_needs_review": arch_needs,
+        "accepted_count": overall_accepted,
+        "needs_review_count": overall_needs,
+        "finding_count": overall_accepted + overall_needs,
+        "architecture_skipped": arch_skipped,
+        "no_issues": overall_accepted == 0 and overall_needs == 0,
+        "workers_run": workers_run,
+        "tool_call_failures": tool_failures,
+        "gate_threshold": security_report.get("gate_threshold")
+        or (architecture_report or {}).get("gate_threshold"),
+    }
+
+    resolved_path = (
+        path
+        or security_report.get("path")
+        or (architecture_report or {}).get("path")
+        or ""
+    )
+    return {
+        "path": resolved_path,
+        "security": security_report,
+        "architecture": architecture_report,
+        "summary": summary,
+    }
+
+
+def supervise_review(
+    path: str,
+    *,
+    max_iterations: int = 6,
+    run_architecture: bool = True,
+    on_stage: StageCallback | None = None,
+) -> dict[str, Any]:
+    """Top-level Supervisor: run Security (+ Architecture) and aggregate.
+
+    Finding-level Memory/Web routing stays inside the Security path via
+    supervise_finding. This coordinates the two engineering workers only.
+    Architecture is skipped for directories when run_architecture is True (same
+    policy as review_architecture). Diff mode stays Security-only at the CLI.
+    """
+    # Lazy imports avoid the agent ↔ supervisor cycle (agent uses supervise_finding).
+    from app.agent import review_architecture, review_code
+
+    target = str(Path(path).resolve())
+    with agent_scope("supervisor"):
+        log_agent_event(f"supervisor path review starting for {target}")
+        log_agent_event("supervisor -> security worker")
+
+    security_report = review_code(
+        target,
+        max_iterations=max_iterations,
+        on_stage=on_stage,
+    )
+
+    architecture_report: dict[str, Any] | None = None
+    if run_architecture:
+        with agent_scope("supervisor"):
+            log_agent_event("supervisor -> architecture worker")
+        architecture_report = review_architecture(target, on_stage=on_stage)
+
+    combined = aggregate_worker_reports(
+        security_report,
+        architecture_report,
+        path=target,
+    )
+    with agent_scope("supervisor"):
+        summary = combined["summary"]
+        log_agent_event(
+            "supervisor aggregated report: "
+            f"accepted={summary['accepted_count']} "
+            f"needs_review={summary['needs_review_count']} "
+            f"workers={summary['workers_run']}"
+        )
+    return combined

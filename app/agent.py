@@ -680,16 +680,16 @@ def review_path(
     *,
     on_stage: StageCallback | None = None,
 ) -> dict[str, Any]:
-    """Run Security + Architecture reviews for one path.
+    """Run Security + Architecture under the Supervisor aggregator.
 
-    Both workers conceptually sit under one Supervisor per the PRD; here they
-    run sequentially (hand-rolled, no shared orchestration object yet).
-    Architecture only reviews single files today — see review_architecture.
+    Delegates to ``supervise_review`` so CLI and callers share one entry point.
+    Architecture only reviews single files today — directories are skipped there.
     """
-    security_report = review_code(path, max_iterations=max_iterations, on_stage=on_stage)
-    architecture_report = review_architecture(path, on_stage=on_stage)
-    return {
-        "path": security_report.get("path", path),
-        "security": security_report,
-        "architecture": architecture_report,
-    }
+    from app.supervisor import supervise_review
+
+    return supervise_review(
+        path,
+        max_iterations=max_iterations,
+        run_architecture=True,
+        on_stage=on_stage,
+    )
