@@ -146,7 +146,7 @@ def test_review_path_combines_security_and_architecture(
 
     report = review_path(str(target))
 
-    assert set(report.keys()) == {"path", "security", "architecture", "summary"}
+    assert {"path", "security", "architecture", "summary"}.issubset(report.keys())
     assert report["security"]["review_result"]["worker_name"] == "security"
     assert report["architecture"]["worker_name"] == "architecture"
     assert report["summary"]["workers_run"] == ["security", "architecture"]

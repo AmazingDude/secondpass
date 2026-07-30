@@ -130,7 +130,8 @@ def test_supervise_review_aggregates_stubbed_workers(
 
     report = supervise_review(str(target))
 
-    assert set(report.keys()) == {"path", "security", "architecture", "summary"}
+    assert {"path", "security", "architecture", "summary"}.issubset(report.keys())
+    assert "persisted_review_ids" in report
     assert report["security"]["worker_name"] == "security"
     assert report["architecture"]["worker_name"] == "architecture"
     assert report["summary"]["accepted_count"] == 1

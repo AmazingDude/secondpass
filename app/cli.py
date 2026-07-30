@@ -399,6 +399,20 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
             f"\nArchitecture: {summary.get('architecture_accepted', 0)} accepted / "
             f"{summary.get('architecture_needs_review', 0)} needs review"
         )
+    persisted = summary.get("persisted_review_ids") or report.get("persisted_review_ids")
+    if persisted:
+        header.append("\nPersisted review ids: ", style="dim")
+        parts = [
+            f"{worker}={rid}"
+            for worker, rid in persisted.items()
+            if rid is not None
+        ]
+        header.append(", ".join(parts) or "(none)", style="dim")
+        header.append(
+            "\nDecide: secondpass decide --review-id <id> --index 0 "
+            "--accept|--reject --reason \"...\"",
+            style="dim",
+        )
     console.print()
     console.print(Panel.fit(header, border_style="white"))
 
@@ -565,6 +579,166 @@ def search_web_cmd(
 
     for result in results:
         table.add_row(result["title"], result["url"], result["snippet"])
+
+    console.print(table)
+
+
+@app.command()
+def decide(
+    review_id: int = typer.Option(..., "--review-id", help="Persisted review id from a review run."),
+    index: int = typer.Option(
+        0,
+        "--index",
+        "-i",
+        help="0-based index into that review's findings list.",
+    ),
+    reason: str = typer.Option(
+        ...,
+        "--reason",
+        "-r",
+        help="Required human reason for the accept/reject decision.",
+    ),
+    accept: bool = typer.Option(False, "--accept", help="Mark the finding accepted."),
+    reject: bool = typer.Option(False, "--reject", help="Mark the finding rejected."),
+    linked_fix_commit: str | None = typer.Option(
+        None,
+        "--fix-commit",
+        help="Optional linked fix commit hash.",
+    ),
+) -> None:
+    """Record a human accept/reject decision into verified-outcome SQLite memory."""
+    if accept == reject:
+        console.print(
+            "[bold red]Error:[/bold red] Pass exactly one of --accept or --reject.",
+            highlight=False,
+        )
+        raise typer.Exit(code=1)
+
+    from app.verified import record_finding_decision
+
+    try:
+        outcome = record_finding_decision(
+            review_id,
+            index,
+            accepted=accept,
+            reason=reason,
+            linked_fix_commit=linked_fix_commit,
+        )
+    except ValueError as exc:
+        console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
+        raise typer.Exit(code=1) from exc
+
+    decision = "accepted" if outcome.accepted else "rejected"
+    console.print(
+        Panel(
+            Text(
+                f"Outcome #{outcome.id}: {decision}\n"
+                f"File: {outcome.file_path}\n"
+                f"Review id: {outcome.review_id}\n"
+                f"Type: {outcome.finding.finding_type}\n"
+                f"Reason: {outcome.reason}"
+            ),
+            title="Verified outcome saved",
+            border_style="green" if outcome.accepted else "yellow",
+            padding=(1, 2),
+        )
+    )
+
+
+@app.command("list-outcomes")
+def list_outcomes_cmd(
+    path: Path = typer.Argument(
+        ...,
+        exists=True,
+        readable=True,
+        resolve_path=True,
+        help="File path whose verified outcomes to list.",
+    ),
+) -> None:
+    """List SQLite verified outcomes for a file (newest first)."""
+    from app.persistence import _ROOT, _normalize_path, list_outcomes_for_file
+
+    absolute_key = _normalize_path(str(path.resolve()))
+    try:
+        relative_key = _normalize_path(str(path.resolve().relative_to(_ROOT.resolve())))
+    except ValueError:
+        relative_key = absolute_key
+
+    outcomes = list_outcomes_for_file(absolute_key)
+    if not outcomes and relative_key != absolute_key:
+        outcomes = list_outcomes_for_file(relative_key)
+
+    display_key = relative_key if outcomes else absolute_key
+    if not outcomes:
+        console.print(f"No verified outcomes for {display_key}")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f'Verified outcomes for "{display_key}"')
+    table.add_column("ID", justify="right")
+    table.add_column("Decision")
+    table.add_column("Type", overflow="fold")
+    table.add_column("Reason", overflow="fold")
+    table.add_column("Review", justify="right")
+    table.add_column("When", overflow="fold")
+
+    for item in outcomes:
+        table.add_row(
+            str(item.id),
+            "accepted" if item.accepted else "rejected",
+            item.finding.finding_type,
+            item.reason,
+            str(item.review_id) if item.review_id is not None else "",
+            item.created_at.isoformat(),
+        )
+
+    console.print(table)
+
+
+@app.command("list-reviews")
+def list_reviews_cmd(
+    path: Path | None = typer.Argument(
+        None,
+        exists=True,
+        readable=True,
+        resolve_path=True,
+        help="Optional file path filter (shows matching reviews).",
+    ),
+    limit: int = typer.Option(20, "--limit", "-n", help="Max reviews to show."),
+) -> None:
+    """List recent persisted review runs (for decide --review-id)."""
+    from app.persistence import _ROOT, _normalize_path, list_reviews
+
+    reviews = list_reviews(limit=limit)
+    if path is not None:
+        try:
+            key = _normalize_path(str(path.resolve().relative_to(_ROOT.resolve())))
+        except ValueError:
+            key = _normalize_path(str(path.resolve()))
+        reviews = [item for item in reviews if item.file_path == key]
+
+    if not reviews:
+        console.print("No persisted reviews found.")
+        raise typer.Exit(code=1)
+
+    table = Table(title="Persisted reviews")
+    table.add_column("ID", justify="right")
+    table.add_column("Worker")
+    table.add_column("File", overflow="fold")
+    table.add_column("Findings", justify="right")
+    table.add_column("Accepted", justify="right")
+    table.add_column("Needs review", justify="right")
+    table.add_column("When", overflow="fold")
+
+    for item in reviews:
+        table.add_row(
+            str(item.id),
+            item.worker_name,
+            item.file_path,
+            str(len(item.review_result.findings)),
+            str(item.accepted_count),
+            str(item.needs_review_count),
+            item.created_at.isoformat(),
+        )
 
     console.print(table)
 

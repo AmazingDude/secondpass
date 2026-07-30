@@ -9,46 +9,11 @@ from typing import Any
 
 from app.hooks import agent_scope, log_agent_event
 from app.llm import chat
-from app.memory import save_finding
-from app.workers.common import extract_json_object, run_tool_loop
-
-StageCallback = Callable[[str], None]
+from app.workers.common import extract_json_object
 from app.workers.memory_worker import run_memory_worker
 from app.workers.web_worker import run_web_worker
 
-SAVE_TOOLS: list[dict[str, Any]] = [
-    {
-        "type": "function",
-        "function": {
-            "name": "save_finding",
-            "description": (
-                "Persist a NEW confirmed lesson into long-term memory. "
-                "ONLY call when the issue is meaningfully new or a distinct "
-                "variant. Do NOT save if memory_worker already reported a close "
-                "match for the same pattern."
-            ),
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "finding": {
-                        "type": "object",
-                        "description": "Lesson object to store.",
-                        "properties": {
-                            "id": {"type": "string"},
-                            "type": {"type": "string"},
-                            "pattern": {"type": "string"},
-                            "bad_example": {"type": "string"},
-                            "fix": {"type": "string"},
-                            "source": {"type": "string"},
-                        },
-                        "required": ["type", "pattern", "fix"],
-                    }
-                },
-                "required": ["finding"],
-            },
-        },
-    },
-]
+StageCallback = Callable[[str], None]
 
 _ROUTE_SYSTEM = """\
 You are the Supervisor for secondpass. You receive one static-analysis finding.
@@ -79,20 +44,14 @@ clearly matches; use web context to strengthen advice when relevant.
 Do NOT invent risks that are not supported by the finding and worker outputs.
 Stay specific to the code under review.
 
+Do NOT propose saving new lessons to memory. Verified-outcome memory is written
+only after an explicit human accept/reject with a reason (CLI decide command).
+
 When finished, respond with ONLY JSON (no markdown):
 {
   "explanation": "clear explanation of the risk",
-  "suggested_fix": "concrete remediation advice",
-  "should_save_lesson": true/false,
-  "lesson_to_save": null or {
-    "type": "...", "pattern": "...", "bad_example": "...",
-    "fix": "...", "source": "secondpass supervisor"
-  }
+  "suggested_fix": "concrete remediation advice"
 }
-
-Set should_save_lesson true ONLY if this is meaningfully new / distinct from
-any close memory match. If memory_worker already found a strong match, set
-should_save_lesson false and lesson_to_save null.
 """
 
 
@@ -173,67 +132,16 @@ def _synthesize(
                 {
                     "explanation": f"Supervisor synthesis failed: {exc}",
                     "suggested_fix": "",
-                    "should_save_lesson": False,
-                    "lesson_to_save": None,
                 },
                 failures,
             )
 
         content = response.choices[0].message.content or ""
-        parsed = extract_json_object(content) or {"explanation": content, "suggested_fix": ""}
-        parsed.setdefault("should_save_lesson", False)
-        parsed.setdefault("lesson_to_save", None)
+        parsed = extract_json_object(content) or {
+            "explanation": content,
+            "suggested_fix": "",
+        }
         return parsed, failures
-
-
-def _maybe_save_lesson(
-    synth: dict[str, Any],
-    memory_result: dict[str, Any] | None,
-) -> tuple[str | None, int]:
-    """Call save_finding via supervisor tool loop when warranted."""
-    if not synth.get("should_save_lesson"):
-        return None, 0
-    if memory_result and memory_result.get("worth_reporting") and memory_result.get("best_match"):
-        confidence = (memory_result.get("best_match") or {}).get("confidence")
-        if isinstance(confidence, (int, float)) and confidence >= 0.45:
-            log_agent_event(
-                "supervisor skip save_finding — memory_worker already has a close match"
-            )
-            return None, 0
-
-    lesson = synth.get("lesson_to_save")
-    if not isinstance(lesson, dict):
-        return None, 0
-
-    saved_id: str | None = None
-
-    def _on_tool(name: str, result: Any) -> None:
-        nonlocal saved_id
-        if name != "save_finding":
-            return
-        if isinstance(result, dict) and result.get("status") == "saved":
-            saved_id = str(result.get("id"))
-        elif isinstance(result, dict) and result.get("status") == "skipped":
-            saved_id = None
-        else:
-            saved_id = str(result)
-
-    log_agent_event("supervisor -> save_finding (evaluating new lesson)")
-    _, failures = run_tool_loop(
-        agent_name="supervisor",
-        system_prompt=(
-            "You are the Supervisor. Call save_finding exactly once with the "
-            "provided lesson object, then reply with JSON "
-            '{"status": "done"}.'
-        ),
-        user_content=json.dumps({"lesson": lesson}, indent=2),
-        tools=SAVE_TOOLS,
-        handlers={"save_finding": save_finding},
-        max_iterations=3,
-        on_tool_result=_on_tool,
-        temperature=0,
-    )
-    return saved_id, failures
 
 
 def supervise_finding(
@@ -241,7 +149,12 @@ def supervise_finding(
     *,
     max_iterations: int = 4,
 ) -> dict[str, Any]:
-    """Run supervisor → workers → synthesis for one finding."""
+    """Run supervisor → workers → synthesis for one finding.
+
+    Does not auto-write Chroma lessons via save_finding. Seeded lessons in
+    security_lessons.json remain available for MemoryWorker retrieval; new
+    durable outcomes go through human accept/reject → SQLite verified_outcomes.
+    """
     failures = 0
 
     log_agent_event("supervisor received finding; deciding worker routing")
@@ -287,9 +200,9 @@ def supervise_finding(
 
     synth, synth_failures = _synthesize(finding, memory_result, web_result)
     failures += synth_failures
-
-    saved_lesson_id, save_failures = _maybe_save_lesson(synth, memory_result)
-    failures += save_failures
+    log_agent_event(
+        "supervisor skip save_finding — verified outcomes require human accept/reject"
+    )
 
     memory_matches = list((memory_result or {}).get("matches") or [])
     best_match = (memory_result or {}).get("best_match")
@@ -305,7 +218,7 @@ def supervise_finding(
         "memory_match": best_match,
         "memory_matches": memory_matches,
         "web_context": web_context,
-        "saved_lesson_id": saved_lesson_id,
+        "saved_lesson_id": None,
         "explanation": str(synth.get("explanation") or "").strip(),
         "suggested_fix": str(synth.get("suggested_fix") or "").strip(),
         "tool_call_failures": failures,
@@ -431,12 +344,20 @@ def supervise_review(
         architecture_report,
         path=target,
     )
+
+    from app.verified import persist_combined_review
+
+    persisted = persist_combined_review(combined)
+    combined["persisted_review_ids"] = persisted
+    combined["summary"]["persisted_review_ids"] = persisted
+
     with agent_scope("supervisor"):
         summary = combined["summary"]
         log_agent_event(
             "supervisor aggregated report: "
             f"accepted={summary['accepted_count']} "
             f"needs_review={summary['needs_review_count']} "
-            f"workers={summary['workers_run']}"
+            f"workers={summary['workers_run']} "
+            f"persisted={persisted}"
         )
     return combined
