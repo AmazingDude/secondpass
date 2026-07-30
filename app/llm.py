@@ -8,6 +8,11 @@ from typing import Any
 from dotenv import load_dotenv
 from openai import OpenAI
 
+try:
+    from openai import BadRequestError
+except ImportError:  # pragma: no cover
+    BadRequestError = Exception  # type: ignore[misc, assignment]
+
 load_dotenv()
 
 _PROVIDERS = {
@@ -28,9 +33,50 @@ _PROVIDERS = {
     },
 }
 
+# Review/analysis default: pin sampling as low as the provider allows.
+DEFAULT_TEMPERATURE = 0.0
+# Some OpenAI-compatible endpoints reject exactly 0; retry with a tiny epsilon.
+TEMPERATURE_ZERO_FALLBACK = 0.01
 
-def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = None) -> Any:
-    """Send a chat completion request using the configured provider."""
+
+def resolve_chat_temperature(temperature: float | None) -> float:
+    """None → DEFAULT_TEMPERATURE (0.0) for review/analysis determinism."""
+    if temperature is None:
+        return DEFAULT_TEMPERATURE
+    return float(temperature)
+
+
+def temperature_attempt_values(temperature: float) -> list[float | None]:
+    """Ordered temperature tries: requested, then fallbacks that omit on failure.
+
+    ``None`` in the list means "omit the temperature field" for providers that
+    reject the parameter entirely.
+    """
+    attempts: list[float | None] = [temperature]
+    if temperature == 0.0:
+        attempts.append(TEMPERATURE_ZERO_FALLBACK)
+        attempts.append(None)
+    return attempts
+
+
+def _is_temperature_reject(exc: BaseException) -> bool:
+    text = str(exc).lower()
+    return "temperature" in text
+
+
+def chat(
+    messages: list[dict[str, Any]],
+    tools: list[dict[str, Any]] | None = None,
+    *,
+    temperature: float | None = None,
+) -> Any:
+    """Send a chat completion request using the configured provider.
+
+    ``temperature`` defaults to 0.0 (via None → DEFAULT_TEMPERATURE) so review
+    and analysis calls sample as deterministically as the provider allows.
+    If the provider rejects temperature=0 (or temperature at all), retries with
+    a tiny epsilon and finally omits the field rather than failing the review.
+    """
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
     config = _PROVIDERS.get(provider)
     if config is None:
@@ -55,4 +101,20 @@ def chat(messages: list[dict[str, Any]], tools: list[dict[str, Any]] | None = No
         request["tools"] = tools
         request["tool_choice"] = "auto"
 
-    return client.chat.completions.create(**request)
+    resolved = resolve_chat_temperature(temperature)
+    last_error: BaseException | None = None
+    for attempt in temperature_attempt_values(resolved):
+        payload = dict(request)
+        if attempt is not None:
+            payload["temperature"] = attempt
+        try:
+            return client.chat.completions.create(**payload)
+        except BadRequestError as exc:
+            last_error = exc
+            if not _is_temperature_reject(exc):
+                raise
+            continue
+
+    if last_error is not None:
+        raise last_error
+    raise RuntimeError("chat() failed without a provider response")

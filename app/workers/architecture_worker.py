@@ -288,6 +288,7 @@ def run_architecture_worker(
                     },
                 ],
                 tools=None,
+                temperature=0,
             )
         except Exception as exc:  # noqa: BLE001
             failures += 1

@@ -84,6 +84,7 @@ def run_memory_worker(
         handlers={"search_memory": search_memory},
         max_iterations=max_iterations,
         on_tool_result=_on_tool,
+        temperature=0,
     )
 
     # Prefer structured worker output; fall back to raw matches if JSON incomplete.

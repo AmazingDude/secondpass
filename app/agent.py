@@ -202,6 +202,7 @@ def assess_logic_review(
                     },
                 ],
                 tools=None,
+                temperature=0,
             )
         except Exception as exc:  # noqa: BLE001
             failures += 1

@@ -80,6 +80,7 @@ def run_web_worker(
         handlers={"search_web": search_web},
         max_iterations=max_iterations,
         on_tool_result=_on_tool,
+        temperature=0,
     )
 
     if results_collected and not final.get("results"):

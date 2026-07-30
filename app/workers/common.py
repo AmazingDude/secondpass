@@ -83,10 +83,12 @@ def run_tool_loop(
     handlers: dict[str, Callable[..., Any]],
     max_iterations: int = 4,
     on_tool_result: Callable[[str, Any], None] | None = None,
+    temperature: float | None = None,
 ) -> tuple[dict[str, Any], int]:
     """Run a small agent tool loop scoped to ``agent_name``.
 
     Returns (final_json_dict, tool_call_failures).
+    ``temperature`` defaults to 0 via chat() when None (review determinism).
     """
     messages: list[dict[str, Any]] = [
         {"role": "system", "content": system_prompt},
@@ -98,7 +100,7 @@ def run_tool_loop(
     with agent_scope(agent_name):
         for iteration in range(max_iterations):
             try:
-                response = chat(messages, tools=tools)
+                response = chat(messages, tools=tools, temperature=temperature)
             except BadRequestError as exc:
                 failures += 1
                 messages.append(

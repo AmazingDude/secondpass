@@ -112,6 +112,7 @@ def _route_workers(finding: dict[str, Any]) -> tuple[dict[str, Any], int]:
                     },
                 ],
                 tools=None,
+                temperature=0,
             )
         except Exception as exc:  # noqa: BLE001
             failures += 1
@@ -164,6 +165,7 @@ def _synthesize(
                     },
                 ],
                 tools=None,
+                temperature=0,
             )
         except Exception as exc:  # noqa: BLE001
             failures += 1
@@ -229,6 +231,7 @@ def _maybe_save_lesson(
         handlers={"save_finding": save_finding},
         max_iterations=3,
         on_tool_result=_on_tool,
+        temperature=0,
     )
     return saved_id, failures
 
