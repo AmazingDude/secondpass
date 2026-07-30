@@ -37,6 +37,26 @@ _HARD_EVIDENCE_MARKERS = (
     "same pattern in",
 )
 
+# Ownership / authz / IDOR — Security Worker territory; drop if Architecture emits these.
+_SECURITY_BLEED_MARKERS = (
+    "ownership",
+    "owner_id",
+    "current_user",
+    "idor",
+    "insecure direct object",
+    "authorization",
+    "authentication",
+    "access control",
+    "broken access",
+    "permission check",
+    "permissions check",
+    "authz",
+    "unauthorized access",
+    "without checking owner",
+    "missing ownership",
+    "ownership check",
+)
+
 _SYSTEM = """\
 You are ArchitectureWorker for secondpass, a careful reviewer of code
 structure and conventions — NOT security. Your ONLY job: naming conventions,
@@ -51,7 +71,16 @@ CRITICAL RULES:
   name the file, function, or lines involved.
 - Vague concerns ("could be cleaner", "consider refactoring") without a
   concrete instance are NOT findings. Treat those as clean (has_issues=false).
-- Do not flag security issues — those are handled by the Security Worker.
+- Do NOT flag security issues — those are handled ONLY by the Security Worker.
+- FORBIDDEN (Security Worker only — never report, never reclassify under
+  architecture type names like layering_violation / naming_convention /
+  dependency_direction / duplicated_logic):
+  authentication, authorization, ownership checks, owner_id / current_user
+  comparisons, IDOR / Insecure Direct Object Reference, access control,
+  Broken Access Control, or permission checks. If the only real issue is
+  missing ownership or unauthorized access, set has_issues=false.
+- Do NOT invent architecture findings whose evidence is really "this function
+  returns data without an ownership check" — that is security, not layering.
 
 NAMING (naming_convention):
 - Only flag naming when it contradicts patterns visible in the target and/or
@@ -61,6 +90,8 @@ NAMING (naming_convention):
 - Leading underscore + SCREAMING_SNAKE for module-private constants is often
   intentional. Do NOT suggest stripping the leading _ unless related files
   show the same class of symbol without it.
+- Do NOT suggest renaming symbols to encode security concerns (e.g.
+  NOTES_WITHOUT_OWNERSHIP_CHECK) — that is Security Worker territory.
 
 DUPLICATION (duplicated_logic):
 - Mild similarity / "these look alike" / "could extract a shared helper" is
@@ -181,6 +212,18 @@ def is_soft_only_smell(
     return False
 
 
+def is_security_category_bleed(
+    *,
+    message: str = "",
+    evidence: str = "",
+    suggested_fix: str = "",
+    finding_type: str = "",
+) -> bool:
+    """True when Architecture is re-labeling a Security (authz/IDOR) issue."""
+    text = f"{finding_type}\n{message}\n{evidence}\n{suggested_fix}".lower()
+    return any(marker in text for marker in _SECURITY_BLEED_MARKERS)
+
+
 def _format_context_block(
     target_path: str,
     target_source: str,
@@ -208,6 +251,13 @@ def _issue_to_finding(
     suggested_fix = str(issue.get("suggested_fix") or "").strip() or (
         "Address the structural issue described in the evidence."
     )
+    if is_security_category_bleed(
+        finding_type=finding_type,
+        message=message,
+        evidence=evidence_text,
+        suggested_fix=suggested_fix,
+    ):
+        return None
     if is_soft_only_smell(
         finding_type,
         message=message,

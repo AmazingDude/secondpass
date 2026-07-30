@@ -2,9 +2,14 @@
 
 from __future__ import annotations
 
+from types import SimpleNamespace
+from typing import Any
+
 from app.llm import (
     DEFAULT_TEMPERATURE,
     TEMPERATURE_ZERO_FALLBACK,
+    chat,
+    format_temperature_attempt,
     resolve_chat_temperature,
     temperature_attempt_values,
 )
@@ -30,3 +35,75 @@ def test_temperature_attempts_for_zero_include_fallback_then_omit() -> None:
 
 def test_temperature_attempts_for_nonzero_are_single() -> None:
     assert temperature_attempt_values(0.5) == [0.5]
+
+
+def test_format_temperature_attempt_labels() -> None:
+    assert format_temperature_attempt(0.0) == "0.0"
+    assert format_temperature_attempt(0.01) == "0.01"
+    assert format_temperature_attempt(None) == "omitted"
+
+
+def test_chat_logs_fallback_when_zero_rejected(monkeypatch) -> None:
+    events: list[str] = []
+    temperatures_seen: list[float | None] = []
+
+    class _TempReject(Exception):
+        pass
+
+    class _FakeCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            temp = kwargs.get("temperature", "__omitted__")
+            temperatures_seen.append(None if temp == "__omitted__" else temp)
+            if "temperature" in kwargs and kwargs["temperature"] == 0.0:
+                raise _TempReject("Invalid temperature: must be > 0")
+            return SimpleNamespace(
+                choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))]
+            )
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setattr("app.llm.OpenAI", _FakeClient)
+    monkeypatch.setattr("app.llm.BadRequestError", _TempReject)
+    monkeypatch.setattr(
+        "app.llm.log_agent_event",
+        lambda message, **kwargs: events.append(message),
+    )
+
+    chat([{"role": "user", "content": "hi"}], temperature=0)
+
+    assert temperatures_seen[0] == 0.0
+    assert temperatures_seen[1] == TEMPERATURE_ZERO_FALLBACK
+    assert any("provider rejected 0.0" in event for event in events)
+    assert any(
+        "fell back to 0.01" in event and "rejected [0.0]" in event for event in events
+    )
+
+
+def test_chat_logs_when_zero_accepted_first_try(monkeypatch) -> None:
+    events: list[str] = []
+
+    class _FakeCompletions:
+        def create(self, **kwargs: Any) -> Any:
+            assert kwargs.get("temperature") == 0.0
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(content="{}"))])
+
+    class _FakeClient:
+        def __init__(self, *args: Any, **kwargs: Any) -> None:
+            self.chat = SimpleNamespace(completions=_FakeCompletions())
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "test-key")
+    monkeypatch.setattr("app.llm.OpenAI", _FakeClient)
+    monkeypatch.setattr(
+        "app.llm.log_agent_event",
+        lambda message, **kwargs: events.append(message),
+    )
+
+    chat([{"role": "user", "content": "hi"}], temperature=0)
+
+    assert any("using 0.0" in event for event in events)
+    assert not any("fell back" in event for event in events)

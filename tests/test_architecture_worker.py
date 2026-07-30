@@ -10,6 +10,7 @@ from app.workers.architecture_worker import (
     _SYSTEM,
     _issue_to_finding,
     adjust_architecture_confidence,
+    is_security_category_bleed,
     is_soft_only_smell,
     run_architecture_worker,
 )
@@ -22,6 +23,10 @@ def test_system_prompt_encodes_fp_hardening_rules() -> None:
     assert "could extract a shared helper" in _SYSTEM
     assert "confidence < 80" in _SYSTEM
     assert "Reserve confidence >= 80" in _SYSTEM
+    assert "IDOR" in _SYSTEM
+    assert "ownership checks" in _SYSTEM
+    assert "Security Worker only" in _SYSTEM
+    assert "NOTES_WITHOUT_OWNERSHIP_CHECK" in _SYSTEM
 
 
 def test_issue_to_finding_produces_schema_valid_finding() -> None:
@@ -143,6 +148,92 @@ def test_is_soft_only_smell_true_for_mild_similarity() -> None:
         message="These helpers are similar",
         evidence="could extract a shared helper",
     )
+
+
+def test_security_bleed_idor_layering_is_dropped() -> None:
+    """notes_idor-style category bleed must not become an architecture finding."""
+    finding = _issue_to_finding(
+        "benchmark/fixtures/notes_idor.py",
+        {
+            "finding_type": "layering_violation",
+            "confidence": 90,
+            "location": "get_note",
+            "evidence": (
+                "get_note returns NOTES.get(note_id) without comparing "
+                "owner_id to current_user_id"
+            ),
+            "message": "Missing ownership check allows unauthorized access (IDOR)",
+            "suggested_fix": "Add an ownership / authorization check before return",
+        },
+    )
+    assert finding is None
+    assert is_security_category_bleed(
+        finding_type="layering_violation",
+        evidence="owner_id is never compared to current_user_id",
+        message="IDOR / missing ownership",
+    )
+
+
+def test_security_bleed_ownership_naming_suggestion_is_dropped() -> None:
+    finding = _issue_to_finding(
+        "benchmark/fixtures/notes_idor.py",
+        {
+            "finding_type": "naming_convention",
+            "confidence": 79,
+            "location": "NOTES",
+            "evidence": "NOTES holds records keyed only by id",
+            "message": "Name does not reflect missing ownership check",
+            "suggested_fix": "Rename to NOTES_WITHOUT_OWNERSHIP_CHECK",
+        },
+    )
+    assert finding is None
+
+
+def test_genuine_architecture_finding_survives_security_filter() -> None:
+    """Non-authz architecture signal must not be eaten by the bleed filter."""
+    finding = _issue_to_finding(
+        "app/service.py",
+        {
+            "finding_type": "dependency_direction",
+            "confidence": 88,
+            "location": "app/service.py:12",
+            "evidence": (
+                "service.py imports app.cli.render_report; related files use "
+                "the same pattern inverted — core depends on the CLI layer"
+            ),
+            "message": "Core service layer depends on the CLI presentation layer",
+            "suggested_fix": "Move shared rendering helpers out of cli.py",
+        },
+    )
+    assert finding is not None
+    assert finding.finding_type == "dependency_direction"
+    assert finding.confidence == 88
+    assert not is_security_category_bleed(
+        finding_type=finding.finding_type,
+        message="Core service layer depends on the CLI presentation layer",
+        evidence="service.py imports app.cli.render_report",
+        suggested_fix="Move shared rendering helpers out of cli.py",
+    )
+
+
+def test_genuine_duplicated_logic_survives_security_filter() -> None:
+    finding = _issue_to_finding(
+        "app/worker.py",
+        {
+            "finding_type": "duplicated_logic",
+            "confidence": 90,
+            "location": "retry_once / retry_twice",
+            "evidence": (
+                "near-identical copy-pasted retry loop appears verbatim in "
+                "worker.py and helper.py"
+            ),
+            "message": "Identical retry block duplicated across two modules",
+            "suggested_fix": "Extract one shared retry helper; keep edits in sync",
+        },
+    )
+    assert finding is not None
+    assert finding.finding_type == "duplicated_logic"
+    assert finding.confidence == 90
 
 
 def test_empty_source_returns_clean_shape_without_llm_call(

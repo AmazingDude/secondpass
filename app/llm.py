@@ -13,6 +13,8 @@ try:
 except ImportError:  # pragma: no cover
     BadRequestError = Exception  # type: ignore[misc, assignment]
 
+from app.hooks import log_agent_event
+
 load_dotenv()
 
 _PROVIDERS = {
@@ -59,9 +61,33 @@ def temperature_attempt_values(temperature: float) -> list[float | None]:
     return attempts
 
 
+def format_temperature_attempt(attempt: float | None) -> str:
+    """Human-readable label for logs / tests."""
+    if attempt is None:
+        return "omitted"
+    return str(attempt)
+
+
 def _is_temperature_reject(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "temperature" in text
+
+
+def _log_temperature_outcome(
+    *,
+    attempt: float | None,
+    requested: float,
+    rejected_prior: list[float | None],
+) -> None:
+    label = format_temperature_attempt(attempt)
+    if not rejected_prior:
+        log_agent_event(f"llm temperature: using {label} (requested {requested})")
+        return
+    prior = ", ".join(format_temperature_attempt(item) for item in rejected_prior)
+    log_agent_event(
+        f"llm temperature: provider rejected [{prior}]; "
+        f"fell back to {label} (requested {requested})"
+    )
 
 
 def chat(
@@ -76,6 +102,7 @@ def chat(
     and analysis calls sample as deterministically as the provider allows.
     If the provider rejects temperature=0 (or temperature at all), retries with
     a tiny epsilon and finally omits the field rather than failing the review.
+    Each successful attempt (including first-try 0.0) is logged via log_agent_event.
     """
     provider = os.getenv("LLM_PROVIDER", "groq").lower()
     config = _PROVIDERS.get(provider)
@@ -103,17 +130,30 @@ def chat(
 
     resolved = resolve_chat_temperature(temperature)
     last_error: BaseException | None = None
+    rejected_prior: list[float | None] = []
     for attempt in temperature_attempt_values(resolved):
         payload = dict(request)
         if attempt is not None:
             payload["temperature"] = attempt
         try:
-            return client.chat.completions.create(**payload)
+            response = client.chat.completions.create(**payload)
         except BadRequestError as exc:
             last_error = exc
             if not _is_temperature_reject(exc):
                 raise
+            rejected_prior.append(attempt)
+            log_agent_event(
+                "llm temperature: provider rejected "
+                f"{format_temperature_attempt(attempt)} ({exc})"
+            )
             continue
+
+        _log_temperature_outcome(
+            attempt=attempt,
+            requested=resolved,
+            rejected_prior=rejected_prior,
+        )
+        return response
 
     if last_error is not None:
         raise last_error
