@@ -153,8 +153,35 @@ def chat(
             requested=resolved,
             rejected_prior=rejected_prior,
         )
+        _audit_prompt_io(messages, response)
         return response
 
     if last_error is not None:
         raise last_error
     raise RuntimeError("chat() failed without a provider response")
+
+
+def _audit_prompt_io(messages: list[dict[str, Any]], response: Any) -> None:
+    """Record redacted prompt/response summary when an audit job is in scope."""
+    try:
+        from app.audit import (
+            STAGE_PROMPT_IO,
+            log_audit_stage,
+            summarize_messages,
+            summarize_model_out,
+        )
+    except ImportError:  # pragma: no cover
+        return
+
+    content = None
+    try:
+        content = response.choices[0].message.content
+    except (AttributeError, IndexError, TypeError):
+        content = None
+    log_audit_stage(
+        STAGE_PROMPT_IO,
+        detail={
+            "prompt": summarize_messages(messages),
+            "model_out": summarize_model_out(content if isinstance(content, str) else None),
+        },
+    )

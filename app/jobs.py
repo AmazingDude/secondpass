@@ -12,7 +12,7 @@ from typing import Any, Callable, Literal
 
 JobStatus = Literal["queued", "running", "completed", "failed"]
 
-ReviewRunner = Callable[[str], dict[str, Any]]
+ReviewRunner = Callable[..., dict[str, Any]]
 
 
 @dataclass
@@ -56,10 +56,10 @@ class JobStore:
         self._runner = runner or self._default_runner
 
     @staticmethod
-    def _default_runner(path: str) -> dict[str, Any]:
+    def _default_runner(path: str, *, job_id: str | None = None) -> dict[str, Any]:
         from app.supervisor import supervise_review
 
-        return supervise_review(path)
+        return supervise_review(path, job_id=job_id)
 
     def set_runner(self, runner: ReviewRunner) -> None:
         """Override the review callable (tests inject a delayed mock)."""
@@ -110,10 +110,22 @@ class JobStore:
         try:
             with self._lock:
                 path = self._jobs[job_id].path
-            result = self._runner(path)
+            result = self._call_runner(path, job_id)
             self._update(job_id, status="completed", result=result, error=None)
         except Exception as exc:  # noqa: BLE001 — surface as failed job status
             self._update(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+
+    def _call_runner(self, path: str, job_id: str) -> dict[str, Any]:
+        """Pass job_id when the runner accepts it (default + new tests)."""
+        import inspect
+
+        try:
+            signature = inspect.signature(self._runner)
+        except (TypeError, ValueError):
+            return self._runner(path)
+        if "job_id" in signature.parameters:
+            return self._runner(path, job_id=job_id)
+        return self._runner(path)
 
     def shutdown(self, *, wait: bool = False) -> None:
         self._executor.shutdown(wait=wait, cancel_futures=True)

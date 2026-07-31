@@ -312,6 +312,19 @@ def build_security_review_output(
         timestamp=timestamp or datetime.now(timezone.utc),
         worker_name="security",
     )
+    try:
+        from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
+
+        log_audit_stage(
+            STAGE_SCHEMA_VALIDATION,
+            worker_name="security",
+            detail={
+                "ok": True,
+                "finding_count": len(finalized_findings),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
     gate_result = apply_confidence_gate(review_result)
     accepted: list[dict[str, Any]] = []
     needs_review: list[dict[str, Any]] = []
@@ -579,6 +592,19 @@ def build_architecture_review_output(
         timestamp=timestamp or datetime.now(timezone.utc),
         worker_name="architecture",
     )
+    try:
+        from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
+
+        log_audit_stage(
+            STAGE_SCHEMA_VALIDATION,
+            worker_name="architecture",
+            detail={
+                "ok": True,
+                "finding_count": len(structured_findings),
+            },
+        )
+    except Exception:  # noqa: BLE001
+        pass
     gate_result = apply_confidence_gate(review_result)
     return review_result, gate_result
 

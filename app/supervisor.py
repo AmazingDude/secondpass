@@ -155,54 +155,66 @@ def supervise_finding(
     security_lessons.json remain available for MemoryWorker retrieval; new
     durable outcomes go through human accept/reject → SQLite verified_outcomes.
     """
+    from app.audit import STAGE_CHROMA_SAVE_SKIP, audit_worker_scope, log_audit_stage
+
     failures = 0
 
-    log_agent_event("supervisor received finding; deciding worker routing")
-    route, route_failures = _route_workers(finding)
-    failures += route_failures
-    log_agent_event(
-        "supervisor routing: "
-        f"memory={route['use_memory']} web={route['use_web']} "
-        f"({route.get('routing_rationale') or 'no rationale'})"
-    )
-
-    memory_result: dict[str, Any] | None = None
-    web_result: dict[str, Any] | None = None
-
-    if route["use_memory"]:
-        log_agent_event("supervisor -> memory_worker")
-        memory_result, mem_failures = run_memory_worker(
-            finding,
-            query_hint=route.get("memory_query_hint") or None,
-            max_iterations=max_iterations,
-        )
-        failures += mem_failures
+    with audit_worker_scope("supervisor"):
+        log_agent_event("supervisor received finding; deciding worker routing")
+        route, route_failures = _route_workers(finding)
+        failures += route_failures
         log_agent_event(
-            "memory_worker -> supervisor "
-            f"(worth_reporting={memory_result.get('worth_reporting')})"
+            "supervisor routing: "
+            f"memory={route['use_memory']} web={route['use_web']} "
+            f"({route.get('routing_rationale') or 'no rationale'})"
         )
 
-    if route["use_web"]:
-        log_agent_event("supervisor -> web_worker")
-        web_result, web_failures = run_web_worker(
-            finding,
-            query_hint=route.get("web_query_hint") or None,
-            max_iterations=max_iterations,
-        )
-        failures += web_failures
+        memory_result: dict[str, Any] | None = None
+        web_result: dict[str, Any] | None = None
+
+        if route["use_memory"]:
+            log_agent_event("supervisor -> memory_worker")
+            memory_result, mem_failures = run_memory_worker(
+                finding,
+                query_hint=route.get("memory_query_hint") or None,
+                max_iterations=max_iterations,
+            )
+            failures += mem_failures
+            log_agent_event(
+                "memory_worker -> supervisor "
+                f"(worth_reporting={memory_result.get('worth_reporting')})"
+            )
+
+        if route["use_web"]:
+            log_agent_event("supervisor -> web_worker")
+            web_result, web_failures = run_web_worker(
+                finding,
+                query_hint=route.get("web_query_hint") or None,
+                max_iterations=max_iterations,
+            )
+            failures += web_failures
+            log_agent_event(
+                "web_worker -> supervisor "
+                f"(relevant={web_result.get('relevant')})"
+            )
+
+        if not route["use_memory"] and not route["use_web"]:
+            log_agent_event(
+                "supervisor routed to neither worker; synthesizing from finding alone"
+            )
+
+        synth, synth_failures = _synthesize(finding, memory_result, web_result)
+        failures += synth_failures
         log_agent_event(
-            "web_worker -> supervisor "
-            f"(relevant={web_result.get('relevant')})"
+            "supervisor skip save_finding — verified outcomes require human accept/reject"
         )
-
-    if not route["use_memory"] and not route["use_web"]:
-        log_agent_event("supervisor routed to neither worker; synthesizing from finding alone")
-
-    synth, synth_failures = _synthesize(finding, memory_result, web_result)
-    failures += synth_failures
-    log_agent_event(
-        "supervisor skip save_finding — verified outcomes require human accept/reject"
-    )
+        log_audit_stage(
+            STAGE_CHROMA_SAVE_SKIP,
+            detail={
+                "reason": "verified outcomes require human accept/reject",
+                "saved_lesson_id": None,
+            },
+        )
 
     memory_matches = list((memory_result or {}).get("matches") or [])
     best_match = (memory_result or {}).get("best_match")
@@ -311,6 +323,7 @@ def supervise_review(
     max_iterations: int = 6,
     run_architecture: bool = True,
     on_stage: StageCallback | None = None,
+    job_id: str | None = None,
 ) -> dict[str, Any]:
     """Top-level Supervisor: run Security (+ Architecture) and aggregate.
 
@@ -318,46 +331,81 @@ def supervise_review(
     supervise_finding. This coordinates the two engineering workers only.
     Architecture is skipped for directories when run_architecture is True (same
     policy as review_architecture). Diff mode stays Security-only at the CLI.
+
+    ``job_id`` keys the persistent audit trail. API jobs pass their job UUID;
+    CLI/MCP callers omit it and get a synthetic id so both share one model.
     """
-    # Lazy imports avoid the agent ↔ supervisor cycle (agent uses supervise_finding).
+    import uuid
+
     from app.agent import review_architecture, review_code
+    from app.audit import (
+        STAGE_REVIEW_COMPLETE,
+        STAGE_REVIEW_START,
+        audit_scope,
+        audit_worker_scope,
+        log_audit_stage,
+    )
 
+    correlation_id = job_id or str(uuid.uuid4())
     target = str(Path(path).resolve())
-    with agent_scope("supervisor"):
-        log_agent_event(f"supervisor path review starting for {target}")
-        log_agent_event("supervisor -> security worker")
 
-    security_report = review_code(
-        target,
-        max_iterations=max_iterations,
-        on_stage=on_stage,
-    )
-
-    architecture_report: dict[str, Any] | None = None
-    if run_architecture:
-        with agent_scope("supervisor"):
-            log_agent_event("supervisor -> architecture worker")
-        architecture_report = review_architecture(target, on_stage=on_stage)
-
-    combined = aggregate_worker_reports(
-        security_report,
-        architecture_report,
-        path=target,
-    )
-
-    from app.verified import persist_combined_review
-
-    persisted = persist_combined_review(combined)
-    combined["persisted_review_ids"] = persisted
-    combined["summary"]["persisted_review_ids"] = persisted
-
-    with agent_scope("supervisor"):
-        summary = combined["summary"]
-        log_agent_event(
-            "supervisor aggregated report: "
-            f"accepted={summary['accepted_count']} "
-            f"needs_review={summary['needs_review_count']} "
-            f"workers={summary['workers_run']} "
-            f"persisted={persisted}"
+    with audit_scope(correlation_id):
+        log_audit_stage(
+            STAGE_REVIEW_START,
+            worker_name="supervisor",
+            detail={"path": target, "run_architecture": run_architecture},
         )
-    return combined
+        with agent_scope("supervisor"):
+            log_agent_event(f"supervisor path review starting for {target}")
+            log_agent_event("supervisor -> security worker")
+
+        with audit_worker_scope("security"):
+            security_report = review_code(
+                target,
+                max_iterations=max_iterations,
+                on_stage=on_stage,
+            )
+
+        architecture_report: dict[str, Any] | None = None
+        if run_architecture:
+            with agent_scope("supervisor"):
+                log_agent_event("supervisor -> architecture worker")
+            with audit_worker_scope("architecture"):
+                architecture_report = review_architecture(target, on_stage=on_stage)
+
+        combined = aggregate_worker_reports(
+            security_report,
+            architecture_report,
+            path=target,
+        )
+
+        from app.verified import persist_combined_review
+
+        persisted = persist_combined_review(combined, job_id=correlation_id)
+        combined["persisted_review_ids"] = persisted
+        combined["summary"]["persisted_review_ids"] = persisted
+        combined["job_id"] = correlation_id
+        combined["summary"]["job_id"] = correlation_id
+
+        log_audit_stage(
+            STAGE_REVIEW_COMPLETE,
+            worker_name="supervisor",
+            detail={
+                "accepted_count": combined["summary"]["accepted_count"],
+                "needs_review_count": combined["summary"]["needs_review_count"],
+                "workers_run": combined["summary"]["workers_run"],
+                "persisted_review_ids": persisted,
+            },
+        )
+
+        with agent_scope("supervisor"):
+            summary = combined["summary"]
+            log_agent_event(
+                "supervisor aggregated report: "
+                f"accepted={summary['accepted_count']} "
+                f"needs_review={summary['needs_review_count']} "
+                f"workers={summary['workers_run']} "
+                f"persisted={persisted} "
+                f"job_id={correlation_id}"
+            )
+        return combined

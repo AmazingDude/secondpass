@@ -275,13 +275,26 @@ def _issue_to_finding(
         evidence=evidence_text,
         suggested_fix=suggested_fix,
     )
-    return StructuredFinding(
-        finding_type=finding_type,
-        evidence=evidence,
-        confidence=confidence,
-        suggested_fix=suggested_fix,
-        detection_method="llm_reasoning",
-    )
+    try:
+        return StructuredFinding(
+            finding_type=finding_type,
+            evidence=evidence,
+            confidence=confidence,
+            suggested_fix=suggested_fix,
+            detection_method="llm_reasoning",
+        )
+    except Exception as exc:  # noqa: BLE001 — schema reject → drop + audit
+        try:
+            from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
+
+            log_audit_stage(
+                STAGE_SCHEMA_VALIDATION,
+                worker_name="architecture",
+                detail={"ok": False, "error": str(exc), "finding_type": finding_type},
+            )
+        except Exception:  # noqa: BLE001
+            pass
+        return None
 
 
 def run_architecture_worker(

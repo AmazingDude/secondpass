@@ -28,6 +28,7 @@ def persist_worker_report(
     report: dict[str, Any] | None,
     *,
     db_path: Path | str | None = None,
+    job_id: str | None = None,
 ) -> StoredReview | None:
     """Persist one worker report's ReviewResult + GateResult if present."""
     if not report:
@@ -41,20 +42,48 @@ def persist_worker_report(
         update={"file_path": _repo_relative_path(review_result.file_path)}
     )
     gate_result = GateResult.model_validate(raw_gate)
-    return save_review(review_result, gate_result, db_path=db_path)
+    stored = save_review(
+        review_result,
+        gate_result,
+        db_path=db_path,
+        job_id=job_id,
+    )
+    try:
+        from app.audit import STAGE_REVIEW_PERSISTED, log_audit_stage
+
+        log_audit_stage(
+            STAGE_REVIEW_PERSISTED,
+            worker_name=stored.worker_name,
+            job_id=job_id,
+            detail={
+                "review_id": stored.id,
+                "accepted_count": stored.accepted_count,
+                "needs_review_count": stored.needs_review_count,
+                "file_path": stored.file_path,
+            },
+            db_path=db_path,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return stored
 
 
 def persist_combined_review(
     combined: dict[str, Any],
     *,
     db_path: Path | str | None = None,
+    job_id: str | None = None,
 ) -> dict[str, int | None]:
     """Save Security (+ Architecture) review rows; return {worker: review_id}."""
     ids: dict[str, int | None] = {"security": None, "architecture": None}
-    security = persist_worker_report(combined.get("security"), db_path=db_path)
+    security = persist_worker_report(
+        combined.get("security"), db_path=db_path, job_id=job_id
+    )
     if security is not None:
         ids["security"] = security.id
-    architecture = persist_worker_report(combined.get("architecture"), db_path=db_path)
+    architecture = persist_worker_report(
+        combined.get("architecture"), db_path=db_path, job_id=job_id
+    )
     if architecture is not None:
         ids["architecture"] = architecture.id
     return ids
@@ -86,7 +115,7 @@ def record_finding_decision(
         )
 
     finding: Finding = findings[finding_index]
-    return save_verified_outcome(
+    outcome = save_verified_outcome(
         finding,
         accepted=accepted,
         reason=reason_text,
@@ -95,3 +124,23 @@ def record_finding_decision(
         linked_fix_commit=linked_fix_commit,
         db_path=db_path,
     )
+    try:
+        from app.audit import STAGE_VERIFIED_OUTCOME, log_audit_stage
+
+        log_audit_stage(
+            STAGE_VERIFIED_OUTCOME,
+            worker_name=stored.worker_name,
+            job_id=stored.job_id,
+            detail={
+                "outcome_id": outcome.id,
+                "review_id": stored.id,
+                "finding_index": finding_index,
+                "accepted": accepted,
+                "reason": reason_text,
+                "finding_type": finding.finding_type,
+            },
+            db_path=db_path,
+        )
+    except Exception:  # noqa: BLE001
+        pass
+    return outcome

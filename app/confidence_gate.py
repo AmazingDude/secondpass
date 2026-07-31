@@ -35,8 +35,24 @@ def apply_confidence_gate(
         else:
             needs_review.append(finding)
 
-    return GateResult(
+    gate = GateResult(
         accepted=accepted,
         needs_review=needs_review,
         threshold=threshold,
     )
+    try:
+        from app.audit import STAGE_CONFIDENCE_GATE, log_audit_stage
+
+        log_audit_stage(
+            STAGE_CONFIDENCE_GATE,
+            worker_name=result.worker_name,
+            detail={
+                "threshold": gate.threshold,
+                "accepted_count": len(gate.accepted),
+                "needs_review_count": len(gate.needs_review),
+                "finding_count": len(result.findings),
+            },
+        )
+    except Exception:  # noqa: BLE001 — audit must never break the gate
+        pass
+    return gate

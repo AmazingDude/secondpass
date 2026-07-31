@@ -400,6 +400,13 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
             f"{summary.get('architecture_needs_review', 0)} needs review"
         )
     persisted = summary.get("persisted_review_ids") or report.get("persisted_review_ids")
+    job_id = summary.get("job_id") or report.get("job_id")
+    if job_id:
+        header.append(f"\nAudit job_id: {job_id}", style="dim")
+        header.append(
+            f"\nAudit: secondpass audit {job_id}",
+            style="dim",
+        )
     if persisted:
         header.append("\nPersisted review ids: ", style="dim")
         parts = [
@@ -738,6 +745,62 @@ def list_reviews_cmd(
             str(item.accepted_count),
             str(item.needs_review_count),
             item.created_at.isoformat(),
+        )
+
+    console.print(table)
+
+
+@app.command("audit")
+def audit_cmd(
+    job_id: str = typer.Argument(..., help="Submission job_id from API or CLI review."),
+) -> None:
+    """Show one ordered audit trail for a job_id (both workers)."""
+    from app.audit import get_audit_trail
+
+    events = get_audit_trail(job_id)
+    if not events:
+        console.print(f"No audit trail for job_id={job_id}")
+        raise typer.Exit(code=1)
+
+    table = Table(title=f"Audit trail — {job_id}")
+    table.add_column("#", justify="right")
+    table.add_column("When", overflow="fold")
+    table.add_column("Worker")
+    table.add_column("Stage")
+    table.add_column("Detail", overflow="fold")
+
+    for event in events:
+        detail = event.detail or {}
+        compact: dict[str, Any] = {}
+        for key in (
+            "threshold",
+            "accepted_count",
+            "needs_review_count",
+            "finding_count",
+            "ok",
+            "reason",
+            "review_id",
+            "outcome_id",
+            "accepted",
+            "path",
+            "workers_run",
+            "persisted_review_ids",
+            "storage",
+        ):
+            if key in detail:
+                compact[key] = detail[key]
+        if "prompt" in detail and isinstance(detail["prompt"], dict):
+            compact["prompt_chars"] = detail["prompt"].get("total_chars")
+        if "model_out" in detail and isinstance(detail["model_out"], dict):
+            compact["model_out_chars"] = detail["model_out"].get("chars")
+        if not compact:
+            compact = detail
+        table.add_row(
+            str(event.id),
+            event.timestamp.isoformat(),
+            event.worker_name or "",
+            event.stage,
+            str(compact),
         )
 
     console.print(table)

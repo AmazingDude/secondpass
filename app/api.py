@@ -16,6 +16,7 @@ from app.jobs import job_store
 from app.persistence import (
     DEFAULT_DB_PATH,
     get_review,
+    list_audit_events,
     list_outcomes_for_file,
     list_reviews,
 )
@@ -56,6 +57,7 @@ def _serialize_review(stored: Any) -> dict[str, Any]:
         "gate_threshold": stored.gate_threshold,
         "accepted_count": stored.accepted_count,
         "needs_review_count": stored.needs_review_count,
+        "job_id": stored.job_id,
         "review_result": stored.review_result.model_dump(mode="json"),
         "gate_result": stored.gate_result.model_dump(mode="json"),
     }
@@ -95,6 +97,35 @@ def get_job(job_id: str) -> dict[str, Any]:
     if job is None:
         raise HTTPException(status_code=404, detail=f"Unknown job_id: {job_id}")
     return job.to_dict()
+
+
+@app.get("/reviews/jobs/{job_id}/audit")
+def get_job_audit(job_id: str) -> dict[str, Any]:
+    """Return one ordered audit trail for a submission (both workers).
+
+    Reads SQLite — works after process restart even when the in-memory job
+    is gone. 404 only when no events exist for this job_id.
+    """
+    events = list_audit_events(job_id, db_path=DEFAULT_DB_PATH)
+    if not events:
+        raise HTTPException(
+            status_code=404,
+            detail=f"No audit trail for job_id={job_id}",
+        )
+    return {
+        "job_id": job_id,
+        "event_count": len(events),
+        "events": [
+            {
+                "id": event.id,
+                "stage": event.stage,
+                "worker_name": event.worker_name,
+                "timestamp": event.timestamp.isoformat(),
+                "detail": event.detail,
+            }
+            for event in events
+        ],
+    }
 
 
 @app.get("/reviews/{review_id}")

@@ -148,3 +148,58 @@ def test_save_and_list_verified_outcomes_by_file(tmp_path: Path) -> None:
     )
     assert len(other) == 1
     assert other[0].finding.finding_type == "command_injection"
+
+
+def test_init_db_migrates_pre_job_id_reviews_table(tmp_path: Path) -> None:
+    """Older DBs lack reviews.job_id; init_db must ADD COLUMN before indexing."""
+    import sqlite3
+
+    from app.confidence_gate import apply_confidence_gate
+    from app.persistence import init_db, save_review
+    from app.schema import Finding, ReviewResult
+    from datetime import datetime, timezone
+
+    db_path = tmp_path / "legacy.db"
+    with sqlite3.connect(db_path) as conn:
+        conn.execute(
+            """
+            CREATE TABLE reviews (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                file_path TEXT NOT NULL,
+                worker_name TEXT NOT NULL,
+                created_at TEXT NOT NULL,
+                review_result_json TEXT NOT NULL,
+                gate_threshold INTEGER NOT NULL,
+                accepted_count INTEGER NOT NULL,
+                needs_review_count INTEGER NOT NULL,
+                gate_result_json TEXT NOT NULL
+            )
+            """
+        )
+        conn.commit()
+
+    init_db(db_path)
+    with sqlite3.connect(db_path) as conn:
+        cols = {row[1] for row in conn.execute("PRAGMA table_info(reviews)")}
+    assert "job_id" in cols
+
+    finding = Finding(
+        finding_type="missing_ownership_check",
+        evidence="get_note skips owner_id",
+        confidence=90,
+        suggested_fix="check owner_id",
+        detection_method="llm_reasoning",
+    )
+    result = ReviewResult(
+        findings=[finding],
+        file_path="a.py",
+        timestamp=datetime(2026, 7, 31, tzinfo=timezone.utc),
+        worker_name="security",
+    )
+    stored = save_review(
+        result,
+        apply_confidence_gate(result),
+        db_path=db_path,
+        job_id="legacy-migrate-job",
+    )
+    assert stored.job_id == "legacy-migrate-job"
