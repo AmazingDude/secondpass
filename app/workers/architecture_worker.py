@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -14,6 +15,12 @@ from app.workers.common import extract_json_object
 _MAX_SOURCE_CHARS = 8000
 _SOFT_SMELL_TYPES = frozenset({"naming_convention", "duplicated_logic"})
 _SOFT_CONFIDENCE_CAP = 79
+
+_TARGET_SYMBOL_RE = re.compile(
+    r"^(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)"
+    r"|^([A-Z_][A-Z0-9_]*)\s*=",
+    re.MULTILINE,
+)
 
 _SOFT_DUPLICATION_DROP_MARKERS = (
     "could extract",
@@ -65,6 +72,18 @@ layering violations, dependency-direction problems, and duplicated logic.
 You are given the target file plus a small set of related files (imports,
 same-package siblings, reverse callers) for cross-file context. A layering
 violation cannot be judged from one file alone — use the related files.
+
+TARGET vs CONTEXT (attribution — critical):
+- Related/sibling files are for understanding relationships ONLY. They are
+  NOT additional subjects to review or to file findings against.
+- Every finding you return MUST concern the target file being reviewed —
+  the problem lives in the target (e.g. the target imports the wrong layer,
+  or the target depends upward). Cite the target path or a symbol defined
+  in the target in location/evidence.
+- Do NOT report a finding whose primary subject is a related/context file,
+  even if that related file has a real architecture bug. Someone else will
+  review that file as its own target. If the only issue you notice is in a
+  sibling, set has_issues=false (or omit that issue).
 
 CRITICAL RULES:
 - Only report an issue when there is a real, specific, explainable problem —
@@ -224,6 +243,82 @@ def is_security_category_bleed(
     return any(marker in text for marker in _SECURITY_BLEED_MARKERS)
 
 
+def _mentions_path(text: str, path: str | Path) -> bool:
+    candidate = Path(str(path).replace("\\", "/"))
+    name = candidate.name.lower()
+    stem = candidate.stem.lower()
+    posix = candidate.as_posix().lower()
+    if name and name in text:
+        return True
+    if posix and posix in text:
+        return True
+    if stem and re.search(rf"\b{re.escape(stem)}\b", text):
+        return True
+    return False
+
+
+def _target_defined_symbols(source: str) -> set[str]:
+    symbols: set[str] = set()
+    for match in _TARGET_SYMBOL_RE.finditer(source or ""):
+        name = match.group(1) or match.group(2)
+        if name:
+            symbols.add(name.lower())
+    return symbols
+
+
+def _mentions_symbol(text: str, symbols: set[str]) -> bool:
+    for symbol in symbols:
+        if len(symbol) < 2:
+            continue
+        if re.search(rf"\b{re.escape(symbol)}\b", text):
+            return True
+    return False
+
+
+def is_off_target_finding(
+    target_path: str,
+    *,
+    location: str = "",
+    evidence: str = "",
+    message: str = "",
+    suggested_fix: str = "",
+    context_files: list[ContextFile] | None = None,
+    target_source: str = "",
+) -> bool:
+    """True when a finding is about a context sibling, not the file under review.
+
+    Keeps cross-file context for detection, but drops findings whose evidence
+    only names a related file (or never references the target at all).
+    """
+    text = f"{location}\n{evidence}\n{message}\n{suggested_fix}".lower()
+    mentions_target_path = _mentions_path(text, target_path)
+    mentions_context_path = False
+    for item in context_files or []:
+        if _mentions_path(text, item.path):
+            # Ignore when the "context" path is the target itself.
+            if Path(str(item.path).replace("\\", "/")).name.lower() == Path(
+                str(target_path).replace("\\", "/")
+            ).name.lower():
+                continue
+            mentions_context_path = True
+            break
+
+    # Explicit sibling subject with no target path → misattribution (the §30 bug),
+    # unless a symbol defined in the target clearly anchors the finding there
+    # (e.g. "checkout mutates inventory_data_store" while reviewing checkout).
+    if mentions_context_path and not mentions_target_path:
+        if _mentions_symbol(text, _target_defined_symbols(target_source)):
+            return False
+        return True
+    if mentions_target_path:
+        return False
+
+    # No file path cited — require a clear content match to a target symbol.
+    if _mentions_symbol(text, _target_defined_symbols(target_source)):
+        return False
+    return True
+
+
 def _format_context_block(
     target_path: str,
     target_source: str,
@@ -240,6 +335,9 @@ def _format_context_block(
 def _issue_to_finding(
     target_path: str,
     issue: dict[str, Any],
+    *,
+    context_files: list[ContextFile] | None = None,
+    target_source: str = "",
 ) -> StructuredFinding | None:
     """Map one raw architecture issue to a schema-valid Finding, or None if ungrounded."""
     message = str(issue.get("message") or "").strip()
@@ -251,6 +349,7 @@ def _issue_to_finding(
     suggested_fix = str(issue.get("suggested_fix") or "").strip() or (
         "Address the structural issue described in the evidence."
     )
+    location_raw = str(issue.get("location") or "").strip()
     if is_security_category_bleed(
         finding_type=finding_type,
         message=message,
@@ -265,8 +364,18 @@ def _issue_to_finding(
         suggested_fix=suggested_fix,
     ):
         return None
+    if is_off_target_finding(
+        target_path,
+        location=location_raw,
+        evidence=evidence_text,
+        message=message,
+        suggested_fix=suggested_fix,
+        context_files=context_files,
+        target_source=target_source,
+    ):
+        return None
 
-    location = str(issue.get("location") or target_path).strip()
+    location = location_raw or target_path
     evidence = "\n".join(part for part in [location, evidence_text, message] if part)
     confidence = adjust_architecture_confidence(
         finding_type,
@@ -377,7 +486,12 @@ def run_architecture_worker(
             for issue in raw_issues:
                 if not isinstance(issue, dict):
                     continue
-                finding = _issue_to_finding(target_path, issue)
+                finding = _issue_to_finding(
+                    target_path,
+                    issue,
+                    context_files=context_files,
+                    target_source=target_source,
+                )
                 if finding is not None:
                     structured_findings.append(finding)
 

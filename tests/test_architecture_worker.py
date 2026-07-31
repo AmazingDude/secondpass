@@ -5,11 +5,13 @@ from __future__ import annotations
 from pathlib import Path
 from types import SimpleNamespace
 
+from app.context import ContextFile
 from app.schema import Finding
 from app.workers.architecture_worker import (
     _SYSTEM,
     _issue_to_finding,
     adjust_architecture_confidence,
+    is_off_target_finding,
     is_security_category_bleed,
     is_soft_only_smell,
     run_architecture_worker,
@@ -27,6 +29,8 @@ def test_system_prompt_encodes_fp_hardening_rules() -> None:
     assert "ownership checks" in _SYSTEM
     assert "Security Worker only" in _SYSTEM
     assert "NOTES_WITHOUT_OWNERSHIP_CHECK" in _SYSTEM
+    assert "NOT additional subjects" in _SYSTEM
+    assert "MUST concern the target file" in _SYSTEM
 
 
 def test_issue_to_finding_produces_schema_valid_finding() -> None:
@@ -55,6 +59,8 @@ def test_issue_to_finding_clamps_out_of_range_confidence() -> None:
         "app/agent.py",
         {
             "finding_type": "layering_violation",
+            "location": "app/agent.py",
+            "evidence": "agent.py imports CLI from core",
             "message": "imports CLI from core",
             "confidence": 250,
         },
@@ -369,3 +375,190 @@ def test_run_architecture_worker_treats_llm_error_as_clean(
     assert result["has_issues"] is False
     assert result["failures"] == 1
     assert result["structured_findings"] == []
+
+
+_CHECKOUT = "benchmark/fixtures/architecture/checkout_handler.py"
+_PERSISTENCE = "benchmark/fixtures/architecture/low_level_persistence_client.py"
+_CHECKOUT_SOURCE = Path(_CHECKOUT).read_text(encoding="utf-8")
+_PERSISTENCE_SOURCE = Path(_PERSISTENCE).read_text(encoding="utf-8")
+_ARCH_CONTEXT = [
+    ContextFile(path=_CHECKOUT, relation="same_package", content=_CHECKOUT_SOURCE),
+    ContextFile(path=_PERSISTENCE, relation="same_package", content=_PERSISTENCE_SOURCE),
+    ContextFile(
+        path="benchmark/fixtures/architecture/inventory_data_store.py",
+        relation="imported_by_target",
+        content="STOCK = {}",
+    ),
+    ContextFile(
+        path="benchmark/fixtures/architecture/high_level_order_workflow.py",
+        relation="imported_by_target",
+        content="def finalize_order(order_id: str) -> None:\n    pass\n",
+    ),
+]
+
+
+def test_sibling_dependency_finding_dropped_when_reviewing_checkout() -> None:
+    """§30 leak: reviewing checkout must not keep the persistence client's bug."""
+    finding = _issue_to_finding(
+        _CHECKOUT,
+        {
+            "finding_type": "dependency_direction",
+            "confidence": 100,
+            "location": "low_level_persistence_client.py: write_record function",
+            "evidence": (
+                "benchmark/fixtures/architecture/low_level_persistence_client.py: "
+                "write_record function\nThe low_level_persistence_client imports "
+                "and calls the high_level_order_workflow.finalize_order function."
+            ),
+            "message": (
+                "The low-level persistence client should not depend on the "
+                "high-level order workflow"
+            ),
+            "suggested_fix": "Remove the import of finalize_order",
+        },
+        context_files=_ARCH_CONTEXT,
+        target_source=_CHECKOUT_SOURCE,
+    )
+    assert finding is None
+    assert is_off_target_finding(
+        _CHECKOUT,
+        location="low_level_persistence_client.py: write_record",
+        evidence="low_level_persistence_client imports high_level_order_workflow",
+        message="dependency direction is wrong in the persistence client",
+        context_files=_ARCH_CONTEXT,
+        target_source=_CHECKOUT_SOURCE,
+    )
+
+
+def test_sibling_layering_finding_dropped_when_reviewing_persistence() -> None:
+    """§30 leak: reviewing persistence must not keep checkout's layering bug."""
+    finding = _issue_to_finding(
+        _PERSISTENCE,
+        {
+            "finding_type": "layering_violation",
+            "confidence": 100,
+            "location": "checkout_handler.py:checkout",
+            "evidence": (
+                "checkout_handler.py:checkout\nThe checkout handler imports the "
+                "data-store module directly and mutates the raw dict itself."
+            ),
+            "message": (
+                "The checkout handler should go through the inventory service layer"
+            ),
+            "suggested_fix": "Call reserve_stock instead of mutating STOCK",
+        },
+        context_files=_ARCH_CONTEXT,
+        target_source=_PERSISTENCE_SOURCE,
+    )
+    assert finding is None
+
+
+def test_checkout_keeps_its_own_layering_finding() -> None:
+    finding = _issue_to_finding(
+        _CHECKOUT,
+        {
+            "finding_type": "layering_violation",
+            "confidence": 100,
+            "location": "checkout_handler.py: checkout function",
+            "evidence": (
+                "The checkout function directly imports and mutates the "
+                "inventory_data_store, bypassing the inventory_service layer."
+            ),
+            "message": (
+                "The checkout handler should go through "
+                "inventory_service.reserve_stock for any stock change"
+            ),
+            "suggested_fix": "Replace direct STOCK mutation with reserve_stock",
+        },
+        context_files=_ARCH_CONTEXT,
+        target_source=_CHECKOUT_SOURCE,
+    )
+    assert finding is not None
+    assert finding.finding_type == "layering_violation"
+    assert finding.confidence == 100
+
+
+def test_persistence_keeps_its_own_dependency_finding() -> None:
+    finding = _issue_to_finding(
+        _PERSISTENCE,
+        {
+            "finding_type": "dependency_direction",
+            "confidence": 100,
+            "location": "low_level_persistence_client.py:write_record",
+            "evidence": (
+                "The low-level persistence client imports and calls back into "
+                "the high-level order workflow after every write."
+            ),
+            "message": (
+                "The low-level persistence client should not depend on the "
+                "high-level order workflow"
+            ),
+            "suggested_fix": "Have the workflow call the client, not the reverse",
+        },
+        context_files=_ARCH_CONTEXT,
+        target_source=_PERSISTENCE_SOURCE,
+    )
+    assert finding is not None
+    assert finding.finding_type == "dependency_direction"
+    assert finding.confidence == 100
+
+
+def test_symbol_only_own_finding_survives_via_content_match() -> None:
+    """Own finding can cite a target symbol without repeating the file path."""
+    finding = _issue_to_finding(
+        _CHECKOUT,
+        {
+            "finding_type": "layering_violation",
+            "confidence": 95,
+            "location": "checkout",
+            "evidence": "checkout mutates STOCK from inventory_data_store directly",
+            "message": "Bypasses inventory_service.reserve_stock",
+            "suggested_fix": "Call reserve_stock from checkout",
+        },
+        context_files=_ARCH_CONTEXT,
+        target_source=_CHECKOUT_SOURCE,
+    )
+    assert finding is not None
+    assert finding.finding_type == "layering_violation"
+
+
+def test_mocked_llm_filters_sibling_leak_keeps_own_finding(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """End-to-end filter: mixed LLM payload → only the target's finding remains."""
+    repo = Path(__file__).resolve().parents[1]
+    target = repo / _CHECKOUT
+
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.gather_cross_file_context",
+        lambda *args, **kwargs: list(_ARCH_CONTEXT),
+    )
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.chat",
+        lambda *args, **kwargs: _fake_response(
+            "{"
+            '"has_issues": true, '
+            '"summary": "layering and dependency issues", '
+            '"issues": ['
+            "{"
+            '"finding_type": "layering_violation", "confidence": 100, '
+            '"location": "checkout_handler.py:checkout", '
+            '"evidence": "checkout_handler mutates inventory_data_store.STOCK", '
+            '"message": "checkout bypasses inventory_service", '
+            '"suggested_fix": "use reserve_stock"'
+            "}, "
+            "{"
+            '"finding_type": "dependency_direction", "confidence": 100, '
+            '"location": "low_level_persistence_client.py:write_record", '
+            '"evidence": "low_level_persistence_client imports finalize_order", '
+            '"message": "persistence depends upward on workflow", '
+            '"suggested_fix": "remove finalize_order import"'
+            "}"
+            "]}"
+        ),
+    )
+
+    result = run_architecture_worker(str(target))
+    types = [f.finding_type for f in result["structured_findings"]]
+    assert types == ["layering_violation"]
+    assert result["has_issues"] is True
