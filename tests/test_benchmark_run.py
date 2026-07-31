@@ -118,12 +118,14 @@ def test_run_benchmark_offline_writes_results(tmp_path: Path, monkeypatch) -> No
     )
 
     score = payload["score"]
-    # offline Semgrep hits ops_shell only → 1 TP, 1 FN (notes_idor), 0 FP
+    # offline Semgrep hits ops_shell only → 1 TP; the other 3 non-clean
+    # fixtures (notes_idor, hardcoded_secret, path_traversal) need the LLM
+    # logic-review fallback, which this stub never runs → 3 FN, 0 FP.
     assert score["true_positives"] == 1
     assert score["false_positives"] == 0
-    assert score["false_negatives"] == 1
+    assert score["false_negatives"] == 3
     assert score["precision"] == 1.0
-    assert score["recall"] == 0.5
+    assert score["recall"] == 0.25
     assert payload["scored_bucket"] == "accepted"
     assert payload["mode"] == "offline_semgrep"
     written = list(results_dir.glob("unit_*.json"))
@@ -131,6 +133,10 @@ def test_run_benchmark_offline_writes_results(tmp_path: Path, monkeypatch) -> No
 
 
 def test_mapped_predictions_score_against_real_ground_truth() -> None:
+    """Scope to the two original fixtures — full ground truth now covers more
+    fixtures (hardcoded_secret, path_traversal) added for Security's
+    diversified-bug-class benchmark; this test only checks that ops_shell /
+    notes_idor still map cleanly, not the whole suite."""
     predictions = [
         {
             "file_path": "benchmark/fixtures/ops_shell.py",
@@ -143,7 +149,20 @@ def test_mapped_predictions_score_against_real_ground_truth() -> None:
             "finding_type": "missing_ownership_check",
         },
     ]
-    report = evaluate(predictions, load_ground_truth())
+    full_ground_truth = load_ground_truth()
+    scoped_ground_truth = {
+        **full_ground_truth,
+        "fixtures": {
+            key: value
+            for key, value in full_ground_truth["fixtures"].items()
+            if key
+            in {
+                "benchmark/fixtures/ops_shell.py",
+                "benchmark/fixtures/notes_idor.py",
+            }
+        },
+    }
+    report = evaluate(predictions, scoped_ground_truth)
     assert report.true_positives == 2
     assert report.false_positives == 0
     assert report.false_negatives == 0

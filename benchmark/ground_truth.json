@@ -16,6 +16,20 @@
         "line": 10
       }
     ],
+    "benchmark/fixtures/hardcoded_secret.py": [
+      {
+        "finding_type": "hardcoded_secret",
+        "symbol": "API_KEY",
+        "line": 7
+      }
+    ],
+    "benchmark/fixtures/path_traversal.py": [
+      {
+        "finding_type": "path_traversal",
+        "symbol": "read_export",
+        "line": 13
+      }
+    ],
     "benchmark/fixtures/clean_ownership.py": []
   }
 }

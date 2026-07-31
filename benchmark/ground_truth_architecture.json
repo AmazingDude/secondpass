@@ -1,0 +1,21 @@
+{
+  "version": "1",
+  "description": "Architecture Worker detection-quality benchmark ground truth (separate from Security's ground_truth.json — different worker, different finding-type vocabulary, own fixtures directory so cross-file context doesn't mix with Security fixtures).",
+  "fixtures": {
+    "benchmark/fixtures/architecture/checkout_handler.py": [
+      {
+        "finding_type": "layering_violation",
+        "symbol": "checkout",
+        "line": 15
+      }
+    ],
+    "benchmark/fixtures/architecture/low_level_persistence_client.py": [
+      {
+        "finding_type": "dependency_direction",
+        "symbol": "write_record",
+        "line": 17
+      }
+    ],
+    "benchmark/fixtures/architecture/clean_price_formatter.py": []
+  }
+}

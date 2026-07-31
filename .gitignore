@@ -9,6 +9,11 @@ venv/
 .secondpass/
 tool_calls.log
 
+# Regenerable; cite scores in prompts.md. Re-run:
+#   python -m app.benchmark_run --label …
+#   python -m app.benchmark_run_architecture --label …
+benchmark/results/*.json
+
 .pytest_cache/
 .mypy_cache/
 .ruff_cache/
