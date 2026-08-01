@@ -1,0 +1,225 @@
+import { useMemo, useState } from "react";
+import { ArrowLeft } from "lucide-react";
+import type { Finding, ReviewPayload } from "../api";
+import { CodeBlock } from "../components/CodeBlock";
+
+export type DisplayFinding = Finding & {
+  gate: "accepted" | "needs_review";
+  worker_name: string;
+  file_path: string;
+  review_id: number;
+  key: string;
+};
+
+export function flattenReviews(reviews: ReviewPayload[]): DisplayFinding[] {
+  const rows: DisplayFinding[] = [];
+  for (const review of reviews) {
+    const gate = review.gate_result;
+    for (const [bucket, items] of [
+      ["accepted", gate.accepted] as const,
+      ["needs_review", gate.needs_review] as const,
+    ]) {
+      items.forEach((finding, index) => {
+        rows.push({
+          ...finding,
+          gate: bucket,
+          worker_name: review.worker_name,
+          file_path: review.file_path,
+          review_id: review.id,
+          key: `${review.id}-${bucket}-${index}-${finding.finding_type}`,
+        });
+      });
+    }
+  }
+  return rows;
+}
+
+function groupByType(findings: DisplayFinding[]) {
+  const map = new Map<string, DisplayFinding[]>();
+  for (const finding of findings) {
+    const list = map.get(finding.finding_type) || [];
+    list.push(finding);
+    map.set(finding.finding_type, list);
+  }
+  return [...map.entries()].sort((a, b) => a[0].localeCompare(b[0]));
+}
+
+type Props = {
+  reviews: ReviewPayload[];
+  jobPath?: string;
+  onBack?: () => void;
+  backLabel?: string;
+};
+
+export function FindingsView({
+  reviews,
+  jobPath,
+  onBack,
+  backLabel = "Back",
+}: Props) {
+  const findings = useMemo(() => flattenReviews(reviews), [reviews]);
+  const groups = useMemo(() => groupByType(findings), [findings]);
+  const [selectedKey, setSelectedKey] = useState<string | null>(
+    findings[0]?.key ?? null,
+  );
+  const selected = findings.find((f) => f.key === selectedKey) || null;
+
+  const acceptedCount = findings.filter((f) => f.gate === "accepted").length;
+  const needsCount = findings.filter((f) => f.gate === "needs_review").length;
+  const cleanWorkers = reviews.filter(
+    (r) => r.accepted_count === 0 && r.needs_review_count === 0,
+  );
+
+  return (
+    <div>
+      <p className="app-eyebrow">Findings</p>
+      <h1 className="app-title">Review result</h1>
+
+      {onBack ? (
+        <div className="toolbar">
+          <button
+            type="button"
+            className="btn btn-ghost"
+            onClick={onBack}
+            aria-label={`Back to ${backLabel}`}
+          >
+            <ArrowLeft size={16} strokeWidth={2} className="btn-icon" aria-hidden />
+            {backLabel}
+          </button>
+        </div>
+      ) : null}
+
+      <div className="findings-summary">
+        <span>
+          Path:{" "}
+          <span className="mono">{jobPath || reviews[0]?.file_path || "—"}</span>
+        </span>
+        <span>
+          Workers: {reviews.map((r) => r.worker_name).join(", ") || "none"}
+        </span>
+        <span>
+          Accepted: <strong>{acceptedCount}</strong>
+        </span>
+        <span>
+          Needs review: <strong>{needsCount}</strong>
+        </span>
+        {cleanWorkers.map((r) => (
+          <span
+            key={r.id}
+            className="badge badge-clean"
+            title={`${r.worker_name} clean`}
+          >
+            {r.worker_name}: clean
+          </span>
+        ))}
+      </div>
+
+      {findings.length === 0 ? (
+        <div className="card clean-state">
+          <span className="badge badge-clean">No issues found</span>
+          <p className="empty-detail">
+            Both workers reported clean (or nothing cleared the confidence
+            gate).
+          </p>
+        </div>
+      ) : (
+        <div className="findings-layout">
+          <div>
+            {groups.map(([type, items]) => (
+              <section key={type} className="finding-group">
+                <div className="finding-group-header">
+                  <h2 className="finding-group-title">{type}</h2>
+                  <span className="count-badge">{items.length}</span>
+                </div>
+                {items.map((finding) => (
+                  <button
+                    key={finding.key}
+                    type="button"
+                    className={[
+                      "finding-row",
+                      `gate-${finding.gate}`,
+                      selectedKey === finding.key ? "selected" : "",
+                    ].join(" ")}
+                    onClick={() => setSelectedKey(finding.key)}
+                  >
+                    <div className="finding-row-top">
+                      <span
+                        className={
+                          finding.gate === "accepted"
+                            ? "badge badge-accepted"
+                            : "badge badge-needs_review"
+                        }
+                      >
+                        {finding.gate === "accepted"
+                          ? "Accepted"
+                          : "Needs review"}
+                      </span>
+                      {finding.detection_method === "llm_reasoning" ? (
+                        <span className="badge badge-ai">AI detection</span>
+                      ) : null}
+                      <span className="finding-title">
+                        {finding.confidence}% · {finding.worker_name}
+                      </span>
+                    </div>
+                    <div className="finding-row-meta mono">
+                      {finding.file_path}
+                    </div>
+                  </button>
+                ))}
+              </section>
+            ))}
+          </div>
+
+          <aside className="card detail-panel">
+            {!selected ? (
+              <p className="empty-detail">Select a finding to inspect.</p>
+            ) : (
+              <>
+                <div className="detail-header">
+                  <h2 className="detail-title">{selected.finding_type}</h2>
+                  <span
+                    className={
+                      selected.gate === "accepted"
+                        ? "badge badge-accepted"
+                        : "badge badge-needs_review"
+                    }
+                  >
+                    {selected.gate === "accepted"
+                      ? "Accepted"
+                      : "Needs review"}
+                  </span>
+                  {selected.detection_method === "llm_reasoning" ? (
+                    <span className="badge badge-ai">AI detection</span>
+                  ) : null}
+                </div>
+                <p className="detail-path mono">
+                  {selected.file_path} · {selected.worker_name} ·{" "}
+                  {selected.confidence}% confidence
+                </p>
+
+                <div className="evidence-callout" role="note">
+                  <span aria-hidden="true">◈</span>
+                  <div style={{ flex: 1, minWidth: 0 }}>
+                    <strong>Evidence</strong>
+                    <CodeBlock
+                      code={selected.evidence}
+                      filePath={selected.file_path}
+                      mode="auto"
+                    />
+                  </div>
+                </div>
+
+                <p className="section-label">Suggested fix</p>
+                <CodeBlock
+                  code={selected.suggested_fix}
+                  filePath={selected.file_path}
+                  mode="auto"
+                />
+              </>
+            )}
+          </aside>
+        </div>
+      )}
+    </div>
+  );
+}

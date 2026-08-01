@@ -10,6 +10,7 @@ from pathlib import Path
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.jobs import job_store
@@ -29,6 +30,18 @@ app = FastAPI(
         "review, poll job status, fetch persisted reviews, record verified outcomes."
     ),
     version="0.1.0",
+)
+
+# Browser dashboard (Vite default); no auth — local-dev origins only.
+app.add_middleware(
+    CORSMiddleware,
+    allow_origins=[
+        "http://127.0.0.1:5173",
+        "http://localhost:5173",
+    ],
+    allow_credentials=False,
+    allow_methods=["*"],
+    allow_headers=["*"],
 )
 
 
