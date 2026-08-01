@@ -11,6 +11,7 @@ from app.workers.architecture_worker import (
     _SYSTEM,
     _issue_to_finding,
     adjust_architecture_confidence,
+    is_insufficient_structure_claim,
     is_off_target_finding,
     is_security_category_bleed,
     is_soft_only_smell,
@@ -31,6 +32,9 @@ def test_system_prompt_encodes_fp_hardening_rules() -> None:
     assert "NOTES_WITHOUT_OWNERSHIP_CHECK" in _SYSTEM
     assert "NOT additional subjects" in _SYSTEM
     assert "MUST concern the target file" in _SYSTEM
+    assert "INSUFFICIENT STRUCTURE" in _SYSTEM
+    assert "standard library module" in _SYSTEM
+    assert "no architectural layers" in _SYSTEM
 
 
 def test_issue_to_finding_produces_schema_valid_finding() -> None:
@@ -222,6 +226,124 @@ def test_genuine_architecture_finding_survives_security_filter() -> None:
     )
 
 
+def test_stdlib_subprocess_layering_claim_is_dropped() -> None:
+    """ops_shell-shaped FP: inventing layers from a stdlib import."""
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "benchmark/fixtures/ops_shell.py").read_text(encoding="utf-8")
+    issue = {
+        "finding_type": "layering_violation",
+        "confidence": 85,
+        "location": "ops_shell.py:5",
+        "evidence": (
+            "The target file imports subprocess, which is a lower-level "
+            "system module."
+        ),
+        "message": (
+            "ops_shell.py should not depend on lower-level system utilities "
+            "directly."
+        ),
+        "suggested_fix": (
+            "Encapsulate subprocess calls in a higher-level service layer."
+        ),
+    }
+    assert is_insufficient_structure_claim(
+        finding_type=issue["finding_type"],
+        target_source=source,
+        message=issue["message"],
+        evidence=issue["evidence"],
+        suggested_fix=issue["suggested_fix"],
+    )
+    assert (
+        _issue_to_finding(
+            "benchmark/fixtures/ops_shell.py", issue, target_source=source
+        )
+        is None
+    )
+
+
+def test_stdlib_pathlib_layering_claim_is_dropped() -> None:
+    """path_traversal-shaped FP: pathlib framed as a higher-level layer."""
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "benchmark/fixtures/path_traversal.py").read_text(
+        encoding="utf-8"
+    )
+    issue = {
+        "finding_type": "layering_violation",
+        "confidence": 85,
+        "location": "path_traversal.py:5",
+        "evidence": (
+            "The target file imports 'Path' from 'pathlib', which is a "
+            "higher-level module."
+        ),
+        "message": (
+            "The target file should not depend on higher-level modules that "
+            "are not part of its layer."
+        ),
+        "suggested_fix": (
+            "Refactor to use a dedicated service layer for file operations."
+        ),
+    }
+    assert is_insufficient_structure_claim(
+        finding_type=issue["finding_type"],
+        target_source=source,
+        message=issue["message"],
+        evidence=issue["evidence"],
+        suggested_fix=issue["suggested_fix"],
+    )
+    assert (
+        _issue_to_finding(
+            "benchmark/fixtures/path_traversal.py", issue, target_source=source
+        )
+        is None
+    )
+
+
+def test_invented_application_layer_with_stdlib_is_dropped() -> None:
+    """Invented 'service layer' wording must not rescue a stdlib-only file."""
+    source = "from pathlib import Path\n\ndef read(p: str) -> str:\n    return Path(p).read_text()\n"
+    assert is_insufficient_structure_claim(
+        finding_type="layering_violation",
+        target_source=source,
+        evidence="pathlib is a standard library module / application layer",
+        message="should not depend on higher-level abstractions",
+        suggested_fix="use a dedicated service layer for file operations",
+    )
+
+
+def test_real_layering_with_service_boundary_survives_structure_filter() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    source = (repo / "benchmark/fixtures/architecture/checkout_handler.py").read_text(
+        encoding="utf-8"
+    )
+    assert not is_insufficient_structure_claim(
+        finding_type="layering_violation",
+        target_source=source,
+        evidence=(
+            "checkout imports inventory_data_store and mutates STOCK, "
+            "bypassing the inventory_service layer"
+        ),
+        message="Handler reaches into the data store past the service layer",
+        suggested_fix="Call inventory_service.reserve_stock instead",
+    )
+
+
+def test_real_dependency_direction_survives_structure_filter() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    source = (
+        repo / "benchmark/fixtures/architecture/low_level_persistence_client.py"
+    ).read_text(encoding="utf-8")
+    assert not is_insufficient_structure_claim(
+        finding_type="dependency_direction",
+        target_source=source,
+        evidence=(
+            "The low-level persistence client imports and calls the "
+            "high-level order workflow"
+        ),
+        message="persistence should not depend upward on the workflow",
+        suggested_fix="Have the workflow call the persistence client",
+    )
+
+
 def test_genuine_duplicated_logic_survives_security_filter() -> None:
     finding = _issue_to_finding(
         "app/worker.py",
@@ -271,7 +393,11 @@ def test_run_architecture_worker_maps_mocked_llm_issues(
     tmp_path: Path, monkeypatch
 ) -> None:
     target = tmp_path / "service.py"
-    target.write_text("def do_thing():\n    pass\n", encoding="utf-8")
+    # First-party import gives enough layer surface for a structure claim.
+    target.write_text(
+        "from app.ui import render\n\ndef do_thing():\n    render()\n",
+        encoding="utf-8",
+    )
 
     monkeypatch.setattr(
         "app.workers.architecture_worker.gather_cross_file_context",

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import ast
 import re
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,58 @@ _SECURITY_BLEED_MARKERS = (
     "ownership check",
 )
 
+# Layering / dependency claims need a real multi-module surface.
+_STRUCTURE_CLAIM_TYPES = frozenset({"layering_violation", "dependency_direction"})
+_STDLIB_TOP_LEVEL = frozenset(
+    {
+        "__future__",
+        "abc",
+        "argparse",
+        "asyncio",
+        "base64",
+        "builtins",
+        "collections",
+        "concurrent",
+        "contextlib",
+        "copy",
+        "dataclasses",
+        "datetime",
+        "enum",
+        "functools",
+        "hashlib",
+        "hmac",
+        "http",
+        "importlib",
+        "inspect",
+        "io",
+        "itertools",
+        "json",
+        "logging",
+        "math",
+        "os",
+        "pathlib",
+        "pickle",
+        "platform",
+        "random",
+        "re",
+        "secrets",
+        "shutil",
+        "socket",
+        "ssl",
+        "string",
+        "subprocess",
+        "sys",
+        "tempfile",
+        "threading",
+        "time",
+        "traceback",
+        "typing",
+        "urllib",
+        "uuid",
+        "warnings",
+    }
+)
+
 _SYSTEM = """\
 You are ArchitectureWorker for secondpass, a careful reviewer of code
 structure and conventions — NOT security. Your ONLY job: naming conventions,
@@ -84,6 +137,19 @@ TARGET vs CONTEXT (attribution — critical):
   even if that related file has a real architecture bug. Someone else will
   review that file as its own target. If the only issue you notice is in a
   sibling, set has_issues=false (or omit that issue).
+
+INSUFFICIENT STRUCTURE (do not invent layers):
+- A small single-purpose script that only uses the standard library often has
+  no architectural layers to assess. If there is no identifiable project layer
+  boundary (e.g. handler vs service vs data store, or high-level workflow vs
+  low-level persistence), set has_issues=false for layering / dependency claims.
+- Importing a standard library module (subprocess, pathlib, os, sys, json, …)
+  is NOT, by itself, evidence of a layering_violation or dependency_direction
+  problem. Stdlib is not a "lower" or "higher" application layer.
+- A real layering / dependency-direction finding must name an actual
+  project-defined boundary being crossed (which first-party module/layer
+  should be used instead, or which upward dependency is wrong) — not "this
+  file imports a lower/higher-level-sounding module."
 
 CRITICAL RULES:
 - Only report an issue when there is a real, specific, explainable problem —
@@ -243,6 +309,49 @@ def is_security_category_bleed(
     return any(marker in text for marker in _SECURITY_BLEED_MARKERS)
 
 
+def _source_has_first_party_import(source: str) -> bool:
+    """True when source imports a non-stdlib / relative (first-party) module."""
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return False
+    for node in ast.walk(tree):
+        if isinstance(node, ast.ImportFrom) and node.level and node.level > 0:
+            return True
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                top = (alias.name or "").split(".", 1)[0]
+                if top and top not in _STDLIB_TOP_LEVEL:
+                    return True
+        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
+            top = node.module.split(".", 1)[0]
+            if top and top not in _STDLIB_TOP_LEVEL:
+                return True
+    return False
+
+
+def is_insufficient_structure_claim(
+    *,
+    finding_type: str = "",
+    target_source: str = "",
+    message: str = "",
+    evidence: str = "",
+    suggested_fix: str = "",
+) -> bool:
+    """True when layering/dependency is claimed on a file with no layer surface.
+
+    A real layering or dependency-direction issue requires a first-party module
+    boundary. Stdlib-only scripts have nothing to violate — drop those claims
+    regardless of invented "service layer" wording in the finding text.
+    """
+    _ = (message, evidence, suggested_fix)
+    if finding_type not in _STRUCTURE_CLAIM_TYPES:
+        return False
+    if not (target_source or "").strip():
+        return False
+    return not _source_has_first_party_import(target_source)
+
+
 def _mentions_path(text: str, path: str | Path) -> bool:
     candidate = Path(str(path).replace("\\", "/"))
     name = candidate.name.lower()
@@ -352,6 +461,14 @@ def _issue_to_finding(
     location_raw = str(issue.get("location") or "").strip()
     if is_security_category_bleed(
         finding_type=finding_type,
+        message=message,
+        evidence=evidence_text,
+        suggested_fix=suggested_fix,
+    ):
+        return None
+    if is_insufficient_structure_claim(
+        finding_type=finding_type,
+        target_source=target_source,
         message=message,
         evidence=evidence_text,
         suggested_fix=suggested_fix,

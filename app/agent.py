@@ -27,6 +27,57 @@ MAX_TOOL_ITERATIONS = 6
 _MAX_LOGIC_SOURCE_CHARS = 12000
 _STATIC_RULE_CONFIDENCE = 90
 
+# Architecture / structure language — not exploitable security. Drop if logic-review
+# dresses these up as security findings (reverse of Architecture's authz-bleed filter).
+_ARCHITECTURE_BLEED_MARKERS = (
+    "layering_violation",
+    "dependency_direction",
+    "dependency_direction_violation",
+    "naming_convention",
+    "duplicated_logic",
+    "bypass_of_business_rules",
+    "bypass of business",
+    "business rule",
+    "business rules",
+    "service layer",
+    "bypassing the service",
+    "bypass the service",
+    "layering",
+    "dependency direction",
+    "depends upward",
+    "importing upward",
+    "wrong layer",
+    "architectural",
+    "architecture issue",
+    "architecture concern",
+    "mixed concerns",
+    "separation of concerns",
+    "cross-cutting",
+    "module boundary",
+    "module boundaries",
+    "clean architecture",
+)
+
+# Known Security finding_type labels — never treat as architecture bleed.
+_SECURITY_FINDING_TYPE_ALLOWLIST = frozenset(
+    {
+        "missing_ownership_check",
+        "command_injection",
+        "hardcoded_secret",
+        "path_traversal",
+        "sql_injection",
+        "ssrf",
+        "xss",
+        "insecure_deserialization",
+        "open_redirect",
+        "csrf",
+        "idor",
+        "broken_access_control",
+        "authentication_bypass",
+        "logic_security_issue",
+    }
+)
+
 _LOGIC_ASSESS_SYSTEM = """\
 You are a careful security logic reviewer for secondpass. Semgrep reported no
 (or unavailable) static findings for this source. Your job is a second look for
@@ -41,6 +92,19 @@ CRITICAL RULES:
   "add more validation") without a concrete bug in THIS code are NOT findings.
   Treat those as clean (has_issues=false).
 - Do not invent secrets, endpoints, or auth flows that are not in the source.
+
+ARCHITECTURE vs SECURITY (category bleed — critical):
+- You are NOT the Architecture Worker. Do NOT invent findings about layering,
+  dependency direction, naming conventions, duplicated logic, "bypass of
+  business rules," service-layer structure, or similar design concerns and
+  dress them up as security issues.
+- A file that only has a structural / layering / dependency-direction smell
+  (even a real one) and no exploitable security vulnerability MUST come back
+  has_issues=false. Those belong to Architecture Worker, not here.
+- Valid security findings include concrete exploitable issues such as missing
+  ownership / IDOR, command injection, hardcoded secrets, path traversal,
+  injection, auth bypass — not "this handler should go through a service
+  layer" or "this low-level module imports a high-level one."
 
 Respond with ONLY JSON (no markdown):
 {
@@ -149,6 +213,23 @@ def map_logic_issue(
     )
 
 
+def is_architecture_category_bleed(
+    *,
+    finding_type: str = "",
+    message: str = "",
+    evidence: str = "",
+    suggested_fix: str = "",
+) -> bool:
+    """True when Security logic-review is re-labeling an Architecture issue."""
+    normalized_type = (finding_type or "").strip().lower().replace("-", "_")
+    if normalized_type in _SECURITY_FINDING_TYPE_ALLOWLIST:
+        return False
+    # Allowlist also matches when Semgrep-style types aren't used but the label
+    # is clearly one of our security GT labels (substring-safe via exact set).
+    text = f"{finding_type}\n{message}\n{evidence}\n{suggested_fix}".lower()
+    return any(marker in text for marker in _ARCHITECTURE_BLEED_MARKERS)
+
+
 def _source_is_reviewable(path: str) -> bool:
     try:
         text = Path(path).read_text(encoding="utf-8").strip()
@@ -231,6 +312,20 @@ def assess_logic_review(
                     continue
                 message = str(issue.get("message") or "").strip()
                 if not message:
+                    continue
+                finding_type = str(issue.get("finding_type") or "").strip()
+                suggested_fix = str(issue.get("suggested_fix") or "").strip()
+                snippet = str(issue.get("snippet") or "").strip()
+                if is_architecture_category_bleed(
+                    finding_type=finding_type,
+                    message=message,
+                    evidence=snippet,
+                    suggested_fix=suggested_fix,
+                ):
+                    log_agent_event(
+                        "logic-review dropped architecture-category bleed "
+                        f"({finding_type or 'untyped'})"
+                    )
                     continue
                 fallback_snippet = source.strip()[:2000]
                 findings.append(

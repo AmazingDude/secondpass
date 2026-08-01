@@ -1,6 +1,6 @@
 {
   "version": "1",
-  "description": "secondpass detection-quality benchmark ground truth",
+  "description": "secondpass detection-quality benchmark ground truth. Architecture fixtures are listed with empty expected findings so Security inventing architecture-flavored labels on them counts as false positives (standing reverse-bleed check).",
   "fixtures": {
     "benchmark/fixtures/notes_idor.py": [
       {
@@ -30,6 +30,12 @@
         "line": 13
       }
     ],
-    "benchmark/fixtures/clean_ownership.py": []
+    "benchmark/fixtures/clean_ownership.py": [],
+    "benchmark/fixtures/architecture/checkout_handler.py": [],
+    "benchmark/fixtures/architecture/low_level_persistence_client.py": [],
+    "benchmark/fixtures/architecture/clean_price_formatter.py": [],
+    "benchmark/fixtures/architecture/inventory_data_store.py": [],
+    "benchmark/fixtures/architecture/inventory_service.py": [],
+    "benchmark/fixtures/architecture/high_level_order_workflow.py": []
   }
 }

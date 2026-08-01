@@ -170,6 +170,30 @@ def run_architecture_benchmark(
     except ValueError:
         display = str(out_path)
     print(f"Wrote {display}")
+
+    from app.agent import review_architecture
+    from app.benchmark_cross_worker import (
+        SECURITY_FIXTURES_EXPECT_ARCHITECTURE_NO_AUTHZ_BLEED,
+        assert_architecture_report_clean_of_security_bleed,
+    )
+
+    print(
+        "\n[cross-worker] Architecture must not invent security bleed "
+        "on Security fixtures …",
+        flush=True,
+    )
+    for key in SECURITY_FIXTURES_EXPECT_ARCHITECTURE_NO_AUTHZ_BLEED:
+        fixture_abs = (_REPO_ROOT / key).resolve()
+        print(f"  reviewing {key} …", flush=True)
+        report = review_architecture(str(fixture_abs))
+        assert_architecture_report_clean_of_security_bleed(report, file_path=key)
+        print(
+            f"  ok no-authz-bleed: {key} "
+            f"(accepted={len(report.get('accepted') or [])} "
+            f"needs_review={len(report.get('needs_review') or [])})",
+            flush=True,
+        )
+
     return payload
 
 

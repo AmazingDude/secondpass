@@ -288,6 +288,57 @@ def run_benchmark(
     except ValueError:
         display = str(out_path)
     print(f"Wrote {display}")
+
+    if not offline:
+        from app.benchmark_cross_worker import (
+            ARCHITECTURE_FIXTURES_EXPECT_SECURITY_CLEAN,
+            assert_security_report_clean_of_architecture_bleed,
+        )
+
+        print("\n[cross-worker] Security must stay clean on Architecture fixtures …", flush=True)
+        for key in ARCHITECTURE_FIXTURES_EXPECT_SECURITY_CLEAN:
+            note = next((row for row in per_file if row.get("file_path") == key), None)
+            if note is None:
+                continue
+            if note.get("error"):
+                raise RuntimeError(
+                    f"cross-worker Security review failed for {key}: {note['error']}"
+                )
+            fake_report = {
+                "accepted": [
+                    {
+                        "structured_finding": {
+                            "finding_type": t,
+                            "evidence": "",
+                            "suggested_fix": "",
+                        }
+                    }
+                    for t in (note.get("accepted_raw_types") or [])
+                    if t
+                ],
+                "needs_review": [
+                    {
+                        "structured_finding": {
+                            "finding_type": t,
+                            "evidence": "",
+                            "suggested_fix": "",
+                        }
+                    }
+                    for t in (note.get("needs_review_raw_types") or [])
+                    if t
+                ],
+            }
+            assert_security_report_clean_of_architecture_bleed(
+                fake_report, file_path=key
+            )
+            if (note.get("accepted_count") or 0) or (note.get("needs_review_count") or 0):
+                raise AssertionError(
+                    f"Security reported findings on architecture fixture {key} "
+                    f"(accepted={note.get('accepted_count')} "
+                    f"needs_review={note.get('needs_review_count')})"
+                )
+            print(f"  ok clean: {key}", flush=True)
+
     return payload
 
 
