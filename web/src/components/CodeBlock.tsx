@@ -68,11 +68,41 @@ function languageFromPath(path?: string): string {
   return "python";
 }
 
-/** True when text looks like a code snippet / diff, not plain-English guidance. */
+export type TextSegment = { kind: "text" | "code"; value: string };
+
+/**
+ * Split on paired backticks. Outside = always plain text; inside = code only.
+ * Unmatched trailing backtick is treated as plain text.
+ */
+export function splitBacktickSegments(text: string): TextSegment[] {
+  const segments: TextSegment[] = [];
+  let i = 0;
+  while (i < text.length) {
+    const open = text.indexOf("`", i);
+    if (open === -1) {
+      segments.push({ kind: "text", value: text.slice(i) });
+      break;
+    }
+    if (open > i) {
+      segments.push({ kind: "text", value: text.slice(i, open) });
+    }
+    const close = text.indexOf("`", open + 1);
+    if (close === -1) {
+      segments.push({ kind: "text", value: text.slice(open) });
+      break;
+    }
+    segments.push({ kind: "code", value: text.slice(open + 1, close) });
+    i = close + 1;
+  }
+  return segments.filter((s) => s.value.length > 0);
+}
+
+/** True when text is a whole-block code/diff snippet (no backtick prose mix). */
 export function looksLikeCode(text: string): boolean {
   const trimmed = text.trim();
   if (!trimmed) return false;
   if (/```/.test(trimmed)) return true;
+  if (trimmed.includes("`")) return false;
 
   const lines = trimmed.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   if (lines.length === 0) return false;
@@ -89,9 +119,52 @@ export function looksLikeCode(text: string): boolean {
 
   const hits = lines.filter(codeLine).length;
   if (hits === 0) return false;
-  // Single short code-ish line (e.g. `return NOTES.get(note_id)`)
   if (lines.length === 1 && codeLine(lines[0])) return true;
   return hits / lines.length >= 0.4;
+}
+
+function HighlightedCode({
+  code,
+  language,
+  inline,
+}: {
+  code: string;
+  language: string;
+  inline?: boolean;
+}) {
+  return (
+    <SyntaxHighlighter
+      language={language}
+      style={secondpassPrism}
+      PreTag={inline ? "span" : "div"}
+      customStyle={
+        inline
+          ? {
+              margin: 0,
+              padding: "0.05rem 0.25rem",
+              background: "color-mix(in srgb, var(--surface) 55%, transparent)",
+              borderRadius: 4,
+              display: "inline",
+              fontSize: "0.88em",
+            }
+          : {
+              margin: 0,
+              padding: "0.85rem 0.95rem",
+              background: "transparent",
+            }
+      }
+      codeTagProps={{
+        style: {
+          fontFamily: "var(--font-mono)",
+          fontSize: inline ? "0.88em" : "0.82rem",
+          whiteSpace: inline ? "pre-wrap" : "pre-wrap",
+          wordBreak: "break-word",
+        },
+      }}
+    >
+      {code}
+    </SyntaxHighlighter>
+  );
 }
 
 type Props = {
@@ -99,11 +172,11 @@ type Props = {
   language?: string;
   filePath?: string;
   className?: string;
-  /** auto = highlight only when looksLikeCode; code = always; prose = never */
+  /** auto = backtick-aware mix / whole-block code / plain prose */
   mode?: "auto" | "code" | "prose";
 };
 
-/** Shared block for Findings + Memory — prose by default for NL suggested_fix. */
+/** Shared block for Findings + Memory. Keyword color never applies outside `…`. */
 export function CodeBlock({
   code,
   language,
@@ -111,43 +184,47 @@ export function CodeBlock({
   className,
   mode = "auto",
 }: Props) {
-  const asCode =
-    mode === "code" || (mode === "auto" && looksLikeCode(code));
   const lang = language || languageFromPath(filePath);
-  const wrapClass = ["code-block", !asCode ? "code-block-prose" : "", className]
-    .filter(Boolean)
-    .join(" ");
+  const hasBackticks = code.includes("`");
 
-  if (!asCode) {
+  if (mode === "prose" || (mode === "auto" && !hasBackticks && !looksLikeCode(code))) {
     return (
-      <div className={wrapClass}>
+      <div className={["code-block", "code-block-prose", className].filter(Boolean).join(" ")}>
         <p className="prose-block">{code}</p>
       </div>
     );
   }
 
+  if (mode === "code" || (mode === "auto" && !hasBackticks && looksLikeCode(code))) {
+    return (
+      <div className={["code-block", className].filter(Boolean).join(" ")}>
+        <HighlightedCode code={code} language={lang} />
+      </div>
+    );
+  }
+
+  // Mixed prose + `inline code`: only highlight inside backticks.
+  const segments = splitBacktickSegments(code);
   return (
-    <div className={wrapClass}>
-      <SyntaxHighlighter
-        language={lang}
-        style={secondpassPrism}
-        PreTag="div"
-        customStyle={{
-          margin: 0,
-          padding: "0.85rem 0.95rem",
-          background: "transparent",
-        }}
-        codeTagProps={{
-          style: {
-            fontFamily: "var(--font-mono)",
-            fontSize: "0.82rem",
-            whiteSpace: "pre-wrap",
-            wordBreak: "break-word",
-          },
-        }}
-      >
-        {code}
-      </SyntaxHighlighter>
+    <div
+      className={["code-block", "code-block-prose", className]
+        .filter(Boolean)
+        .join(" ")}
+    >
+      <p className="prose-block prose-mixed">
+        {segments.map((seg, idx) =>
+          seg.kind === "text" ? (
+            <span key={idx}>{seg.value}</span>
+          ) : (
+            <HighlightedCode
+              key={idx}
+              code={seg.value}
+              language={lang}
+              inline
+            />
+          ),
+        )}
+      </p>
     </div>
   );
 }

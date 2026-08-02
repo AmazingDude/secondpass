@@ -103,18 +103,26 @@ export function FindingsView({
         <span>
           Needs review: <strong>{needsCount}</strong>
         </span>
-        {cleanWorkers.map((r) => (
-          <span
-            key={r.id}
-            className="badge badge-clean"
-            title={`${r.worker_name} clean`}
-          >
-            {r.worker_name}: clean
-          </span>
-        ))}
+        {cleanWorkers.length > 0 && findings.length > 0
+          ? cleanWorkers.map((r) => (
+              <span
+                key={r.id}
+                className="badge badge-clean"
+                title={`${r.worker_name} clean`}
+              >
+                {r.worker_name}: clean
+              </span>
+            ))
+          : null}
       </div>
 
-      {findings.length === 0 ? (
+      {reviews.length === 0 ? (
+        <div className="card">
+          <p className="empty-detail">
+            No findings loaded yet — submit a review or open one from History.
+          </p>
+        </div>
+      ) : findings.length === 0 ? (
         <div className="card clean-state">
           <span className="badge badge-clean">No issues found</span>
           <p className="empty-detail">

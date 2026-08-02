@@ -74,11 +74,11 @@ export default function App() {
       });
       return;
     }
+    // Findings: never park Findings messaging on the History screen.
     if (lastFindings) {
       setScreen({ name: "findings", ...lastFindings });
     } else {
-      setLoadError("No findings loaded yet — submit a review or open one from History.");
-      setScreen({ name: "history" });
+      setScreen({ name: "findings", reviews: [] });
     }
   }
 
@@ -109,7 +109,10 @@ export default function App() {
         ))}
       </nav>
 
-      {loadError ? <p className="error-text">{loadError}</p> : null}
+      {loadError &&
+      (screen.name === "submit" || screen.name === "findings") ? (
+        <p className="error-text">{loadError}</p>
+      ) : null}
 
       <div className="view-panel" key={screen.name}>
         {screen.name === "submit" ? (

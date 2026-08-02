@@ -127,7 +127,7 @@ export function HistoryView({ onOpenReview }: Props) {
                       review.needs_review_count === 0 ? (
                         <span className="badge badge-clean">Clean</span>
                       ) : (
-                        <span className="history-gate-text">
+                        <span className="badge badge-gate-summary">
                           {review.accepted_count} acc ·{" "}
                           {review.needs_review_count} review
                         </span>

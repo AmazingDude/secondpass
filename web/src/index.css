@@ -555,6 +555,15 @@ a {
   border: 1px solid var(--accent-mint);
 }
 
+.badge-gate-summary {
+  background: transparent;
+  color: var(--text-secondary);
+  border: 1px solid color-mix(in srgb, var(--text-secondary) 45%, transparent);
+  font-weight: 650;
+  letter-spacing: 0.04em;
+  text-transform: none;
+}
+
 .detail-panel {
   position: sticky;
   top: 1rem;
@@ -639,6 +648,15 @@ a {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   word-break: break-word;
+}
+
+.prose-mixed {
+  font-family: var(--font-sans);
+}
+
+.prose-mixed .inline-code,
+.prose-mixed code {
+  font-family: var(--font-mono);
 }
 
 .path-wrap {
@@ -735,7 +753,7 @@ a {
 }
 
 .history-col-gate {
-  width: 7.5rem;
+  width: 9rem;
   white-space: nowrap;
 }
 
