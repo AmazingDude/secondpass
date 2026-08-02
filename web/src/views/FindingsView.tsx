@@ -3,6 +3,9 @@ import { ArrowLeft } from "lucide-react";
 import type { Finding, ReviewPayload } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
 
+/** Matches app.confidence_gate.DEFAULT_THRESHOLD — presentation only. */
+const GATE_THRESHOLD = 80;
+
 export type DisplayFinding = Finding & {
   gate: "accepted" | "needs_review";
   worker_name: string;
@@ -201,9 +204,48 @@ export function FindingsView({
                   ) : null}
                 </div>
                 <p className="detail-path mono">
-                  {selected.file_path} · {selected.worker_name} ·{" "}
-                  {selected.confidence}% confidence
+                  {selected.file_path} · {selected.worker_name}
                 </p>
+
+                <div
+                  className="confidence-meter"
+                  role="meter"
+                  aria-valuemin={0}
+                  aria-valuemax={100}
+                  aria-valuenow={selected.confidence}
+                  aria-label={`Confidence ${selected.confidence} percent; gate threshold ${GATE_THRESHOLD}`}
+                >
+                  <div className="confidence-meter-top">
+                    <span className="section-label" style={{ margin: 0 }}>
+                      Confidence
+                    </span>
+                    <span className="mono confidence-meter-value">
+                      {selected.confidence}
+                      <span className="confidence-meter-of">/100</span>
+                    </span>
+                  </div>
+                  <div className="confidence-meter-track">
+                    <div
+                      className={[
+                        "confidence-meter-fill",
+                        selected.confidence >= GATE_THRESHOLD
+                          ? "is-accepted"
+                          : "is-needs-review",
+                      ].join(" ")}
+                      style={{
+                        width: `${Math.min(100, Math.max(0, selected.confidence))}%`,
+                      }}
+                    />
+                    <div
+                      className="confidence-meter-tick"
+                      style={{ left: `${GATE_THRESHOLD}%` }}
+                      title={`Gate threshold ${GATE_THRESHOLD}`}
+                    />
+                  </div>
+                  <p className="confidence-meter-hint">
+                    Gate accepts ≥{GATE_THRESHOLD}; below stays needs review
+                  </p>
+                </div>
 
                 <div className="evidence-callout" role="note">
                   <span aria-hidden="true">◈</span>
