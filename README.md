@@ -1,95 +1,62 @@
 # secondpass
 
-A **personal security review agent** for the command line.
+A **personal security + architecture review agent**.
 
-It runs a static scan, checks findings against _your_ past security lessons (persistent memory), optionally pulls public guidance from the web, then writes a short explanation and fix suggestion. Built as a “second pass” over your own recurring mistakes — not a replacement for Semgrep, CodeRabbit, or a full AppSec program.
+It runs a static scan, a logic/authorization pass, and an architecture pass under one Supervisor, gates findings by confidence, retrieves curated personal lessons from Chroma during Security review, records human accept/reject decisions in SQLite, and optionally pulls public remediation context. Built as a second pass over your own recurring mistakes — not a replacement for a full AppSec program.
+
+**Memory honesty:** Chroma holds ~5 curated seed lessons and *does* retrieve during reviews. SQLite verified outcomes are an explicit human decision log (Awais’s required write path) — they are **not** fed back into retrieval yet. Closing that loop is a named stretch (automatic memory updates), not current behavior.
+
+Detection-quality journey (baselines, hardens, final numbers, known limits): [`benchmark/REPORT.md`](benchmark/REPORT.md).
+
+---
+
+## What it does
+
+| Surface | Role |
+| --- | --- |
+| **CLI** | Review a path or git diff; decide accept/reject; list reviews / outcomes / audit |
+| **Supervisor** | Security worker → Architecture worker → combined summary |
+| **Security** | Semgrep + LLM logic/authorization review → schema → confidence gate |
+| **Architecture** | Naming / layering / dependency smells with cross-file context (first-party siblings) |
+| **Memory** | Chroma: curated seed lesson *retrieval*; SQLite: verified outcomes (accept/reject + reason) — write path only until stretch closed-loop |
+| **API** | FastAPI async jobs: submit → poll → results |
+| **Dashboard** | Vite + React: Submit, Findings, History, Memory |
+| **MCP** | Stdio server exposing `review_code` for Cursor / Claude Code / other clients |
 
 ---
 
 ## Architecture
 
-High-level component map:
+Panel walkthrough (one screen). A fuller slide-ready map lives in [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ```text
-                         ┌──────────────────────────────────────┐
-                         │              CLI (cli.py)            │
-                         │     review <path>  |  review --diff  │
-                         └──────────────────┬───────────────────┘
-                                            │
-                              ┌─────────────▼──────────────┐
-                              │     Agent loop (agent.py)  │
-                              │  plan → tool calls → report│
-                              └─────────────┬──────────────┘
-                                            │
-                     always first           │ tool calls
-                            ┌───────────────┼───────────────┐
-                            ▼               ▼               ▼
-                   ┌────────────────┐ ┌───────────┐ ┌──────────────┐
-                   │ Scanner        │ │ LLM       │ │ Skills       │
-                   │ scanner.py     │ │ llm.py    │ │              │
-                   │ Semgrep (+     │ │ Groq /    │ │ Memory       │
-                   │ logic fallback)│ │ Gemini /  │ │  memory.py   │
-                   └────────┬───────┘ │ OpenRouter│ │  ChromaDB    │
-                            │         └─────┬─────┘ │              │
-                            │               │       │ Web search   │
-                            │               ├───────►  websearch.py│
-                            │               │       │  Tavily      │
-                            │               │       │              │
-                            │               └───────► save_finding │
-                            │                       └──────┬───────┘
-                            │                              │
-                            │         ┌────────────────────┘
-                            │         │
-                            ▼         ▼
-                   ┌──────────────────────────────────────┐
-                   │     Rich report (scan · memory ·     │
-                   │         web · explanation / fix)     │
-                   └──────────────────────────────────────┘
-
-  Optional (--diff only):
-    gitdiff.py ──► changed files + line ranges ──► Agent
-                   (filter findings to touched lines)
-
-  Cross-cutting:
-    hooks.py wraps Scanner / Memory / Web search
-    (logs tool name, args, duration)
+Triggers: CLI · API · MCP · Dashboard
+                │
+                ▼
+          Supervisor
+     ┌──────────┴──────────┐
+     ▼                     ▼
+ Security              Architecture
+ Semgrep + logic       cross-file context
+ schema → gate         schema → gate
+     │                     │
+     └──────────┬──────────┘
+                ▼
+   SQLite (reviews, audit, verified outcomes)
+   + Chroma lessons (retrieval)
 ```
 
-| Component      | Job                                                                          |
-| -------------- | ---------------------------------------------------------------------------- |
-| **CLI**        | Entry point; path review or `--diff` mode; prints the Rich report            |
-| **Agent**      | Planner loop — runs the scanner, lets the LLM call skills, builds the report |
-| **LLM**        | Provider-agnostic `chat()` with tool calling                                 |
-| **Scanner**    | Semgrep → normalized findings (logic fallback if scan is empty)              |
-| **Memory**     | Semantic search over past lessons; optional `save_finding`                   |
-| **Web search** | Tavily → title / url / snippet for public guidance                           |
-| **Git diff**   | Picks staged/unstaged files + changed line ranges for `--diff`               |
-| **Hooks**      | Logs timestamp, tool name, args, and duration for every skill call           |
-
----
-
-## Features
-
-- **Static scan** via Semgrep (`p/python`, `p/javascript`)
-- **Git diff mode** — review only what you changed (staged preferred)
-- **MCP server** — expose `review_code` to Claude Code / Cursor / other MCP clients over stdio
-- **Persistent memory** with ChromaDB, seeded from `security_lessons.json`
-- **Web search** via Tavily for OWASP / remediation context
-- **Provider-agnostic LLM** — Groq, Gemini, or OpenRouter (OpenAI-compatible APIs)
-- **Tool-calling agent loop** with logged tool calls (`[tool] …` in the console)
-- **Near-duplicate guard** — won’t spam memory with lessons that already match closely
-- **Graceful degradation** — if Semgrep, memory, or web search fail, review continues with what it has
+**Talk track (30 seconds):** one Supervisor, two workers, same schema + confidence gate on both sides; Chroma retrieves seed lessons; SQLite stores your accept/reject decisions (not yet re-injected into the next review). Hard filters after the LLM (category bleed, sibling attribution, insufficient structure) are why the benchmark numbers moved — details in [`benchmark/REPORT.md`](benchmark/REPORT.md).
 
 ---
 
 ## Requirements
 
 - Python 3.10+
+- Node.js 20+ (dashboard only)
 - Git (for `--diff`)
-- Semgrep (installed via `requirements.txt`)
-- API keys:
-    - One LLM provider: **Groq**, **Gemini**, or **OpenRouter**
-    - **Tavily** (for web search)
+- Semgrep (via `requirements.txt`)
+- API keys: one LLM provider (**groq**, **openai**, **gemini**, or **openrouter**); **Tavily** optional for web context
 
 ---
 
@@ -109,126 +76,105 @@ pip install -r requirements.txt
 cp .env.example .env
 ```
 
-> **Windows tip:** If `python` opens the Microsoft Store, use `py -3.12 -m venv .venv` or disable the `python.exe` App Execution Alias.
-
 Edit `.env`:
 
 ```env
-LLM_PROVIDER=groq          # groq | gemini | openrouter
+LLM_PROVIDER=groq          # groq | openai | gemini | openrouter
 GROQ_API_KEY=...
+OPENAI_API_KEY=...
 GEMINI_API_KEY=...
 OPENROUTER_API_KEY=...
-LLM_MODEL=                 # optional override
+LLM_MODEL=                 # optional override (leave empty for provider default)
 TAVILY_API_KEY=...
 ```
 
-Only the key for your chosen `LLM_PROVIDER` is required (plus Tavily if you want web context).
+Only the key for your chosen `LLM_PROVIDER` is required. If you set `LLM_MODEL` to an OpenAI id while using Groq, Groq will 404 — clear `LLM_MODEL` or set a model that provider accepts.
+
+Primary Architecture eval numbers in the report used **Groq** at temperature 0. OpenAI can disagree on neighboring finding-type labels for the same bug — see [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
 
 ---
 
-## Usage
-
-Run commands as a module from the project root:
+## CLI
 
 ```bash
 python -m app.cli --help
-```
 
-### Review a specific path
-
-```bash
+# Full review (Security + Architecture under Supervisor)
 python -m app.cli review path/to/file_or_dir
-```
 
-### Review your git changes (`--diff`)
-
-```bash
+# Git changes only (Security-scoped to diff hunks; prefer staged)
 python -m app.cli review --diff
-```
 
-**How `--diff` chooses changes**
+# Verified outcomes
+python -m app.cli decide <review_id> --decision accept --reason "real IDOR"
+python -m app.cli list-reviews
+python -m app.cli list-outcomes
+python -m app.cli audit <job_id>
 
-1. Prefer **`git diff --staged`** — what you’re about to commit (pre-commit style).
-2. If nothing is staged, fall back to **unstaged** `git diff` so the command is still useful mid-edit.
-
-**How findings are scoped**
-
-- Changed **files** are scanned as **whole files** (Semgrep/logic review need surrounding context).
-- The report **only keeps findings whose line falls inside the diff hunks** on the new side of the patch.
-- File-level logic-review fallbacks are kept when the file was touched at all.
-
-Do not combine modes: use either `review <path>` **or** `review --diff`.
-
-What you’ll see:
-
-1. Live **tool-call logs** (`run_static_scan`, `search_memory`, `search_web`, …)
-2. A **structured Rich report** per finding:
-    - Scan detail
-    - Matched memory lesson (+ confidence)
-    - Web context (if used)
-    - LLM explanation + suggested fix
-
-If Semgrep finds nothing but the file has code, secondpass falls back to a **logic/authorization review** (useful for IDOR / missing ownership checks that static rules often miss).
-
-### Memory only
-
-```bash
+# Utilities
 python -m app.cli search-memory "user can read someone else's data"
-```
-
-### Web search only
-
-```bash
 python -m app.cli search-web "OWASP broken access control A01"
 ```
 
-### MCP server (expose review as a tool)
+Do not combine modes: use either `review <path>` **or** `review --diff`.
 
-secondpass can run as a local **MCP** server over stdio, exposing one tool: `review_code`.
+---
+
+## API + dashboard
+
+Terminal 1 — API (default `http://127.0.0.1:8000`):
 
 ```bash
-# from the secondpass project root, with venv active
+python -m app.api
+```
+
+Terminal 2 — UI:
+
+```bash
+cd web
+npm install
+npm run dev
+```
+
+Open the Vite URL (usually `http://127.0.0.1:5173`). Override API base with `VITE_API_BASE` if needed.
+
+Dashboard views: **Submit** a path → **Findings** → **History** (prior reviews) → **Memory** (record / browse verified outcomes).
+
+---
+
+## Benchmarks
+
+Planted fixtures + ground truth live under `benchmark/`. Evaluators:
+
+```bash
+python -m app.benchmark_run --label my_run
+python -m app.benchmark_run_architecture --label my_arch_run
+python -m app.benchmark_cross_worker --label my_cross_run
+```
+
+Results write under `benchmark/results/` (gitignored JSON). The written reliability report is committed: [`benchmark/REPORT.md`](benchmark/REPORT.md).
+
+Final snapshot (2026-08-02), accepted findings only:
+
+| Suite | Precision | Recall | Notes |
+| --- | ---: | ---: | --- |
+| Security own-suite | 1.0 | 1.0 | 4 planted bug classes + clean / reverse-bleed rows |
+| Architecture (Groq A/B) | 1.0 | 1.0 | Matches post-attribution / reverse-bleed record |
+| Architecture (OpenAI final) | 0.5 | 0.5 | Same bug found; wrong neighboring `finding_type` on one fixture |
+
+Suite is intentionally narrow — see the report’s known limitations.
+
+---
+
+## MCP
+
+```bash
 python -m app.mcp_server
 ```
 
-That process speaks MCP on stdin/stdout — don’t type into it; an MCP client launches it.
+Exposes `review_code` over stdio (`path` and/or `diff=true`). Point your client’s command at this repo’s venv Python, with `cwd` set to the project root. Keys still load from `.env`.
 
-**Why one tool (path + optional `diff`), not two:** Agents do better with a single, clear capability (“security-review this code”) than with overlapping tools. Path mode is the primary, explicit target; `diff=true` is a narrow alternate input that reuses the same report shape. Diff-only as a separate tool would split the same skill across two names.
-
-**Cursor** — add to MCP settings (`.cursor/mcp.json` in the project or user config):
-
-```json
-{
-  "mcpServers": {
-    "secondpass": {
-      "command": "C:\\Users\\Rehan\\Desktop\\web-dev\\secondpass\\.venv\\Scripts\\python.exe",
-      "args": ["-m", "app.mcp_server"],
-      "cwd": "C:\\Users\\Rehan\\Desktop\\web-dev\\secondpass",
-      "env": {}
-    }
-  }
-}
-```
-
-(Keys still load from secondpass `.env` via `load_dotenv`.)
-
-**Claude Code** — register a local server (paths adjusted for your machine):
-
-```bash
-claude mcp add secondpass --cwd "C:/Users/Rehan/Desktop/web-dev/secondpass" -- "C:/Users/Rehan/Desktop/web-dev/secondpass/.venv/Scripts/python.exe" -m app.mcp_server
-```
-
-Then ask Claude to call `review_code` with e.g. `{"path": "app/scanner.py"}` or `{"diff": true}`.
-
-**MCP Inspector** (interactive UI):
-
-```bash
-npx @modelcontextprotocol/inspector "C:\Users\Rehan\Desktop\web-dev\secondpass\.venv\Scripts\python.exe" -m app.mcp_server
-```
-
-Set the working directory to the secondpass root if the inspector asks for it.
-
-**Programmatic smoke test** (no external client):
+Smoke without an external client:
 
 ```bash
 python -m app.mcp_client_smoke path/to/file.py
@@ -236,82 +182,31 @@ python -m app.mcp_client_smoke path/to/file.py
 
 ---
 
-## How it works
-
-| Piece                   | Role                                                     |
-| ----------------------- | -------------------------------------------------------- |
-| `app/scanner.py`        | Runs Semgrep, normalizes findings                        |
-| `app/gitdiff.py`        | Collects staged/unstaged diffs + changed line ranges     |
-| `app/memory.py`         | ChromaDB lesson store + semantic search + `save_finding` |
-| `app/websearch.py`      | Tavily → `{title, url, snippet}`                         |
-| `app/llm.py`            | Single `chat(messages, tools=…)` across providers        |
-| `app/hooks.py`          | Logs every tool call (console + `tool_calls.log`)        |
-| `app/agent.py`          | Planner loop: scan → LLM tool calls → structured report  |
-| `app/cli.py`            | Typer CLI + Rich output                                  |
-| `app/mcp_server.py`     | MCP stdio server exposing `review_code`                  |
-| `security_lessons.json` | Seed lessons (your real past bugs)                       |
-
-**Agent flow (simplified):**
-
-1. Always run Semgrep first (whole file, even in `--diff` mode)
-2. For each finding, let the LLM decide whether to search memory, search the web, and/or save a _new_ lesson
-3. Cap tool rounds (default 6) to avoid infinite loops
-4. In `--diff` mode, drop findings outside changed line ranges
-5. Print explanation + fix
-
-`save_finding` only persists when the issue looks meaningfully new. Close matches to existing lessons are skipped (prompt + distance guard).
-
----
-
-## Personalizing memory
-
-Edit `security_lessons.json`, then delete `.chromadb/` so the next run re-seeds:
-
-```json
-{
-    "id": "lesson-6",
-    "type": "Broken Access Control",
-    "pattern": "short description of the bug pattern",
-    "bad_example": "minimal bad snippet",
-    "fix": "what to do instead",
-    "source": "where you learned it"
-}
-```
-
-Lessons confirmed during reviews can also be added at runtime via `save_finding` (when they’re not near-duplicates).
-
----
-
 ## Project layout
 
 ```text
 secondpass/
-├── app/
-│   ├── agent.py
-│   ├── cli.py
-│   ├── gitdiff.py
-│   ├── hooks.py
-│   ├── llm.py
-│   ├── memory.py
-│   ├── mcp_server.py
-│   ├── scanner.py
-│   └── websearch.py
+├── app/                 # CLI, Supervisor, workers, API, LLM, scanner, memory, …
+├── web/                 # Vite + React dashboard
+├── benchmark/           # fixtures, ground truth, REPORT.md
+├── tests/
 ├── security_lessons.json
 ├── requirements.txt
 ├── .env.example
 ├── README.md
-└── prompts.md            # build log / assignment notes
+├── ARCHITECTURE.md      # slide / panel system map
+└── prompts.md           # build / learning log (assignment process)
 ```
 
 ---
 
 ## Notes & limits
 
-- This is a **personal** assistant around _your_ lessons + Semgrep, not a complete SAST platform.
-- Logic bugs (e.g. missing ownership checks) may not appear in Semgrep; the logic-review fallback exists for that.
-- `--diff` ignores deleted/binary files and only reviews paths that still exist in the working tree.
-- Groq tool-calling can occasionally fail formatting; the agent retries and continues when possible.
-- `.env`, `.chromadb/`, and `tool_calls.log` are gitignored — keep keys out of the repo.
+- Personal tool around curated seed lessons + scan/logic/architecture passes — not a complete SAST platform. Verified outcomes do not yet change what the next review retrieves.
+- Confidence is LLM self-reported; temperature=0 cuts variance, it does **not** calibrate confidence.
+- Provider choice affects Architecture label stability on overlapping types (`layering_violation` vs `dependency_direction`).
+- `--diff` ignores deleted/binary files and only reviews paths that still exist.
+- `.env`, `.chromadb/`, `.secondpass/`, and `benchmark/results/*.json` stay local / gitignored — keep keys out of the repo.
 
 ---
 
