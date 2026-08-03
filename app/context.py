@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import ast
+import sys
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -11,12 +12,23 @@ _DEFAULT_MAX_FILE_CHARS = 2000
 _DEFAULT_MAX_TOTAL_CHARS = 8000
 _MAX_REVERSE_SCAN_FILES = 40
 
+_STDLIB_NAMES = frozenset(getattr(sys, "stdlib_module_names", ()) or ())
+
 
 @dataclass
 class ContextFile:
     path: str
     relation: str
     content: str
+
+
+@dataclass(frozen=True)
+class ImportFact:
+    """One import from a target file, classified against the project tree."""
+
+    module: str
+    kind: str  # stdlib | resolved_project | unresolved_external
+    resolved_path: str | None = None
 
 
 def _find_project_root(start: Path) -> Path:
@@ -47,6 +59,146 @@ def _path_for_module(module: str, project_root: Path) -> Path | None:
     if init_candidate.is_file():
         return init_candidate
     return None
+
+
+def _is_stdlib_module(module: str) -> bool:
+    top = (module or "").split(".", 1)[0]
+    if not top:
+        return False
+    if _STDLIB_NAMES:
+        return top in _STDLIB_NAMES
+    return False
+
+
+def _display_path(path: Path, project_root: Path) -> str:
+    try:
+        return str(path.resolve().relative_to(project_root.resolve()))
+    except ValueError:
+        return str(path)
+
+
+def _resolve_relative_import(
+    target: Path,
+    *,
+    module: str | None,
+    level: int,
+    project_root: Path,
+) -> tuple[str, Path | None]:
+    """Return (dotted module name, resolved path or None) for a relative import."""
+    package_dir = target.parent
+    for _ in range(max(level - 1, 0)):
+        package_dir = package_dir.parent
+
+    parts = list(module.split(".")) if module else []
+    if parts:
+        candidate_base = package_dir / Path(*parts)
+        file_candidate = candidate_base.with_suffix(".py")
+        init_candidate = candidate_base / "__init__.py"
+        if file_candidate.is_file():
+            resolved = file_candidate
+        elif init_candidate.is_file():
+            resolved = init_candidate
+        else:
+            resolved = None
+    else:
+        init_candidate = package_dir / "__init__.py"
+        resolved = init_candidate if init_candidate.is_file() else None
+
+    dotted = _module_name_for(resolved, project_root) if resolved is not None else None
+    if dotted is None:
+        try:
+            rel_pkg = package_dir.resolve().relative_to(project_root.resolve())
+            pkg_parts = list(rel_pkg.parts) + parts
+            dotted = ".".join(pkg_parts) if pkg_parts else (module or "")
+        except ValueError:
+            dotted = module or package_dir.name
+    return dotted, resolved
+
+
+def classify_imports(
+    source: str,
+    *,
+    target_path: str | Path,
+    project_root: str | Path | None = None,
+) -> list[ImportFact]:
+    """Classify target imports as stdlib, resolved project, or unresolved external.
+
+    Uses ``sys.stdlib_module_names`` for the stdlib set. A module is
+    ``resolved_project`` only when a real ``.py`` / package ``__init__.py``
+    exists under the project root (absolute) or via a resolvable relative import.
+    Framework imports that are not present in the tree (Django, Werkzeug's
+    missing ``.repr`` sibling when isolated, etc.) stay ``unresolved_external``.
+    """
+    target = Path(target_path)
+    try:
+        target = target.resolve()
+    except OSError:
+        pass
+    root = Path(project_root).resolve() if project_root else _find_project_root(target)
+
+    try:
+        tree = ast.parse(source or "")
+    except SyntaxError:
+        return []
+
+    facts: list[ImportFact] = []
+    seen: set[tuple[str, str]] = set()
+
+    def _add(module: str, kind: str, resolved: Path | None) -> None:
+        key = (module, kind)
+        if not module or key in seen:
+            return
+        seen.add(key)
+        facts.append(
+            ImportFact(
+                module=module,
+                kind=kind,
+                resolved_path=_display_path(resolved, root) if resolved else None,
+            )
+        )
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                module = alias.name or ""
+                if _is_stdlib_module(module):
+                    _add(module, "stdlib", None)
+                    continue
+                resolved = _path_for_module(module, root)
+                if resolved is not None:
+                    _add(module, "resolved_project", resolved)
+                else:
+                    _add(module, "unresolved_external", None)
+        elif isinstance(node, ast.ImportFrom):
+            if node.level and node.level > 0:
+                dotted, resolved = _resolve_relative_import(
+                    target,
+                    module=node.module,
+                    level=node.level,
+                    project_root=root,
+                )
+                if resolved is not None:
+                    _add(dotted, "resolved_project", resolved)
+                else:
+                    _add(dotted or (node.module or ""), "unresolved_external", None)
+                continue
+            module = node.module or ""
+            if not module:
+                continue
+            if _is_stdlib_module(module):
+                _add(module, "stdlib", None)
+                continue
+            resolved = _path_for_module(module, root)
+            if resolved is not None:
+                _add(module, "resolved_project", resolved)
+            else:
+                _add(module, "unresolved_external", None)
+
+    return facts
+
+
+def resolved_project_modules(facts: list[ImportFact]) -> list[ImportFact]:
+    return [fact for fact in facts if fact.kind == "resolved_project"]
 
 
 def _imported_modules(source: str) -> list[str]:

@@ -3,6 +3,7 @@ __pycache__/
 *$py.class
 smoke_test_external/
 inspo/
+smoke_test_security/
 .env
 .venv/
 venv/

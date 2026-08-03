@@ -2,12 +2,17 @@
 
 from __future__ import annotations
 
-import ast
 import re
 from pathlib import Path
 from typing import Any
 
-from app.context import ContextFile, gather_cross_file_context
+from app.context import (
+    ContextFile,
+    ImportFact,
+    classify_imports,
+    gather_cross_file_context,
+    resolved_project_modules,
+)
 from app.hooks import agent_scope, log_agent_event
 from app.llm import chat
 from app.schema import Finding as StructuredFinding
@@ -65,57 +70,8 @@ _SECURITY_BLEED_MARKERS = (
     "ownership check",
 )
 
-# Layering / dependency claims need a real multi-module surface.
+# Layering / dependency claims need a real resolved project import edge.
 _STRUCTURE_CLAIM_TYPES = frozenset({"layering_violation", "dependency_direction"})
-_STDLIB_TOP_LEVEL = frozenset(
-    {
-        "__future__",
-        "abc",
-        "argparse",
-        "asyncio",
-        "base64",
-        "builtins",
-        "collections",
-        "concurrent",
-        "contextlib",
-        "copy",
-        "dataclasses",
-        "datetime",
-        "enum",
-        "functools",
-        "hashlib",
-        "hmac",
-        "http",
-        "importlib",
-        "inspect",
-        "io",
-        "itertools",
-        "json",
-        "logging",
-        "math",
-        "os",
-        "pathlib",
-        "pickle",
-        "platform",
-        "random",
-        "re",
-        "secrets",
-        "shutil",
-        "socket",
-        "ssl",
-        "string",
-        "subprocess",
-        "sys",
-        "tempfile",
-        "threading",
-        "time",
-        "traceback",
-        "typing",
-        "urllib",
-        "uuid",
-        "warnings",
-    }
-)
 
 _SYSTEM = """\
 You are ArchitectureWorker for secondpass, a careful reviewer of code
@@ -309,24 +265,21 @@ def is_security_category_bleed(
     return any(marker in text for marker in _SECURITY_BLEED_MARKERS)
 
 
-def _source_has_first_party_import(source: str) -> bool:
-    """True when source imports a non-stdlib / relative (first-party) module."""
-    try:
-        tree = ast.parse(source or "")
-    except SyntaxError:
-        return False
-    for node in ast.walk(tree):
-        if isinstance(node, ast.ImportFrom) and node.level and node.level > 0:
+def _evidence_cites_resolved_project_edge(
+    text: str,
+    facts: list[ImportFact],
+) -> bool:
+    """True when finding text names a resolved project import of the target."""
+    lowered = text.lower()
+    for fact in resolved_project_modules(facts):
+        module = (fact.module or "").lower()
+        if module and module in lowered:
             return True
-        if isinstance(node, ast.Import):
-            for alias in node.names:
-                top = (alias.name or "").split(".", 1)[0]
-                if top and top not in _STDLIB_TOP_LEVEL:
-                    return True
-        elif isinstance(node, ast.ImportFrom) and node.module and node.level == 0:
-            top = node.module.split(".", 1)[0]
-            if top and top not in _STDLIB_TOP_LEVEL:
-                return True
+        last = module.rsplit(".", 1)[-1] if module else ""
+        if last and len(last) >= 2 and re.search(rf"\b{re.escape(last)}\b", lowered):
+            return True
+        if fact.resolved_path and _mentions_path(lowered, fact.resolved_path):
+            return True
     return False
 
 
@@ -334,22 +287,41 @@ def is_insufficient_structure_claim(
     *,
     finding_type: str = "",
     target_source: str = "",
+    target_path: str = "",
+    project_root: str | Path | None = None,
+    import_facts: list[ImportFact] | None = None,
     message: str = "",
     evidence: str = "",
     suggested_fix: str = "",
+    location: str = "",
 ) -> bool:
-    """True when layering/dependency is claimed on a file with no layer surface.
+    """True when layering/dependency lacks a resolved target project edge.
 
-    A real layering or dependency-direction issue requires a first-party module
-    boundary. Stdlib-only scripts have nothing to violate — drop those claims
-    regardless of invented "service layer" wording in the finding text.
+    Stdlib, unresolved framework imports (e.g. Django when not in-tree), and
+    unresolved relative imports do not count as architectural surface. Even
+    when the target *has* resolved project imports, the finding text must cite
+    one of those edges — inventing a layer from ``sys.stdout`` while a
+    relative sibling happens to resolve elsewhere is still dropped.
     """
-    _ = (message, evidence, suggested_fix)
     if finding_type not in _STRUCTURE_CLAIM_TYPES:
         return False
-    if not (target_source or "").strip():
-        return False
-    return not _source_has_first_party_import(target_source)
+
+    facts = import_facts
+    if facts is None:
+        if not (target_source or "").strip() and not target_path:
+            return False
+        facts = classify_imports(
+            target_source or "",
+            target_path=target_path or ".",
+            project_root=project_root,
+        )
+
+    resolved = resolved_project_modules(facts)
+    if not resolved:
+        return True
+
+    text = f"{location}\n{evidence}\n{message}\n{suggested_fix}"
+    return not _evidence_cites_resolved_project_edge(text, facts)
 
 
 def _mentions_path(text: str, path: str | Path) -> bool:
@@ -447,6 +419,8 @@ def _issue_to_finding(
     *,
     context_files: list[ContextFile] | None = None,
     target_source: str = "",
+    project_root: str | Path | None = None,
+    import_facts: list[ImportFact] | None = None,
 ) -> StructuredFinding | None:
     """Map one raw architecture issue to a schema-valid Finding, or None if ungrounded."""
     message = str(issue.get("message") or "").strip()
@@ -459,6 +433,16 @@ def _issue_to_finding(
         "Address the structural issue described in the evidence."
     )
     location_raw = str(issue.get("location") or "").strip()
+    facts = import_facts
+    if facts is None and (
+        (target_source or "").strip()
+        or finding_type in _STRUCTURE_CLAIM_TYPES
+    ):
+        facts = classify_imports(
+            target_source or "",
+            target_path=target_path,
+            project_root=project_root,
+        )
     if is_security_category_bleed(
         finding_type=finding_type,
         message=message,
@@ -469,9 +453,13 @@ def _issue_to_finding(
     if is_insufficient_structure_claim(
         finding_type=finding_type,
         target_source=target_source,
+        target_path=target_path,
+        project_root=project_root,
+        import_facts=facts,
         message=message,
         evidence=evidence_text,
         suggested_fix=suggested_fix,
+        location=location_raw,
     ):
         return None
     if is_soft_only_smell(
@@ -608,6 +596,7 @@ def run_architecture_worker(
                     issue,
                     context_files=context_files,
                     target_source=target_source,
+                    project_root=project_root,
                 )
                 if finding is not None:
                     structured_findings.append(finding)

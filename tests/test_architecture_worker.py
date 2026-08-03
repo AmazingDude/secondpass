@@ -38,8 +38,9 @@ def test_system_prompt_encodes_fp_hardening_rules() -> None:
 
 
 def test_issue_to_finding_produces_schema_valid_finding() -> None:
+    repo = Path(__file__).resolve().parents[1]
     finding = _issue_to_finding(
-        "app/agent.py",
+        str(repo / "app" / "agent.py"),
         {
             "finding_type": "layering_violation",
             "confidence": 82,
@@ -48,6 +49,8 @@ def test_issue_to_finding_produces_schema_valid_finding() -> None:
             "message": "Core module depends on the CLI layer",
             "suggested_fix": "Invert the dependency; move shared logic out of cli.py",
         },
+        target_source="from app.cli import main\n",
+        project_root=repo,
     )
 
     assert isinstance(finding, Finding)
@@ -59,15 +62,18 @@ def test_issue_to_finding_produces_schema_valid_finding() -> None:
 
 
 def test_issue_to_finding_clamps_out_of_range_confidence() -> None:
+    repo = Path(__file__).resolve().parents[1]
     finding = _issue_to_finding(
-        "app/agent.py",
+        str(repo / "app" / "agent.py"),
         {
             "finding_type": "layering_violation",
             "location": "app/agent.py",
-            "evidence": "agent.py imports CLI from core",
+            "evidence": "agent.py imports CLI from app.cli",
             "message": "imports CLI from core",
             "confidence": 250,
         },
+        target_source="from app.cli import main\n",
+        project_root=repo,
     )
     assert finding is not None
     assert finding.confidence == 100
@@ -201,19 +207,22 @@ def test_security_bleed_ownership_naming_suggestion_is_dropped() -> None:
 
 def test_genuine_architecture_finding_survives_security_filter() -> None:
     """Non-authz architecture signal must not be eaten by the bleed filter."""
+    repo = Path(__file__).resolve().parents[1]
     finding = _issue_to_finding(
-        "app/service.py",
+        str(repo / "app" / "agent.py"),
         {
             "finding_type": "dependency_direction",
             "confidence": 88,
-            "location": "app/service.py:12",
+            "location": "app/agent.py:12",
             "evidence": (
-                "service.py imports app.cli.render_report; related files use "
+                "agent.py imports app.cli; related files use "
                 "the same pattern inverted — core depends on the CLI layer"
             ),
             "message": "Core service layer depends on the CLI presentation layer",
             "suggested_fix": "Move shared rendering helpers out of cli.py",
         },
+        target_source="from app.cli import render_report\n",
+        project_root=repo,
     )
     assert finding is not None
     assert finding.finding_type == "dependency_direction"
@@ -229,7 +238,8 @@ def test_genuine_architecture_finding_survives_security_filter() -> None:
 def test_stdlib_subprocess_layering_claim_is_dropped() -> None:
     """ops_shell-shaped FP: inventing layers from a stdlib import."""
     repo = Path(__file__).resolve().parents[1]
-    source = (repo / "benchmark/fixtures/ops_shell.py").read_text(encoding="utf-8")
+    path = repo / "benchmark/fixtures/ops_shell.py"
+    source = path.read_text(encoding="utf-8")
     issue = {
         "finding_type": "layering_violation",
         "confidence": 85,
@@ -249,13 +259,15 @@ def test_stdlib_subprocess_layering_claim_is_dropped() -> None:
     assert is_insufficient_structure_claim(
         finding_type=issue["finding_type"],
         target_source=source,
+        target_path=str(path),
+        project_root=repo,
         message=issue["message"],
         evidence=issue["evidence"],
         suggested_fix=issue["suggested_fix"],
     )
     assert (
         _issue_to_finding(
-            "benchmark/fixtures/ops_shell.py", issue, target_source=source
+            str(path), issue, target_source=source, project_root=repo
         )
         is None
     )
@@ -264,9 +276,8 @@ def test_stdlib_subprocess_layering_claim_is_dropped() -> None:
 def test_stdlib_pathlib_layering_claim_is_dropped() -> None:
     """path_traversal-shaped FP: pathlib framed as a higher-level layer."""
     repo = Path(__file__).resolve().parents[1]
-    source = (repo / "benchmark/fixtures/path_traversal.py").read_text(
-        encoding="utf-8"
-    )
+    path = repo / "benchmark/fixtures/path_traversal.py"
+    source = path.read_text(encoding="utf-8")
     issue = {
         "finding_type": "layering_violation",
         "confidence": 85,
@@ -286,13 +297,15 @@ def test_stdlib_pathlib_layering_claim_is_dropped() -> None:
     assert is_insufficient_structure_claim(
         finding_type=issue["finding_type"],
         target_source=source,
+        target_path=str(path),
+        project_root=repo,
         message=issue["message"],
         evidence=issue["evidence"],
         suggested_fix=issue["suggested_fix"],
     )
     assert (
         _issue_to_finding(
-            "benchmark/fixtures/path_traversal.py", issue, target_source=source
+            str(path), issue, target_source=source, project_root=repo
         )
         is None
     )
@@ -304,20 +317,133 @@ def test_invented_application_layer_with_stdlib_is_dropped() -> None:
     assert is_insufficient_structure_claim(
         finding_type="layering_violation",
         target_source=source,
+        target_path="tmp_only.py",
         evidence="pathlib is a standard library module / application layer",
         message="should not depend on higher-level abstractions",
         suggested_fix="use a dedicated service layer for file operations",
     )
 
 
-def test_real_layering_with_service_boundary_survives_structure_filter() -> None:
-    repo = Path(__file__).resolve().parents[1]
-    source = (repo / "benchmark/fixtures/architecture/checkout_handler.py").read_text(
-        encoding="utf-8"
+def test_django_framework_self_import_layering_is_dropped() -> None:
+    """Isolated Django view importing django.* has no resolved project edge."""
+    source = (
+        "from django.core.exceptions import ImproperlyConfigured\n"
+        "from django.db import models\n"
+        "from django.http import Http404\n\n"
+        "class Detail:\n"
+        "    def get_object(self):\n"
+        "        return None\n"
+    )
+    issue = {
+        "finding_type": "layering_violation",
+        "confidence": 85,
+        "location": "django_detail_view.py:1",
+        "evidence": (
+            "Imports from django.core.exceptions, django.db, and django.http "
+            "indicate dependencies on Django's core framework."
+        ),
+        "message": (
+            "The target file imports Django's core framework, which is a "
+            "higher-level dependency."
+        ),
+        "suggested_fix": "Minimize direct dependencies on Django's core framework.",
+    }
+    assert is_insufficient_structure_claim(
+        finding_type=issue["finding_type"],
+        target_source=source,
+        target_path="smoke/django_detail_view.py",
+        message=issue["message"],
+        evidence=issue["evidence"],
+        suggested_fix=issue["suggested_fix"],
+    )
+    assert (
+        _issue_to_finding(
+            "smoke/django_detail_view.py", issue, target_source=source
+        )
+        is None
+    )
+
+
+def test_werkzeug_sys_stdout_with_unresolved_relative_is_dropped() -> None:
+    """sys.stdout claim must not ride on an unresolved relative import."""
+    source = (
+        "import sys\n"
+        "from .repr import debug_repr\n\n"
+        "def showtraceback():\n"
+        "    sys.stdout._write('x')\n"
+    )
+    issue = {
+        "finding_type": "layering_violation",
+        "confidence": 85,
+        "location": "werkzeug_debug_console.py:118",
+        "evidence": "sys.stdout._write(te.render_traceback_html())",
+        "message": (
+            "The method showtraceback is directly accessing sys.stdout, "
+            "which is a higher-level component, violating the layering principle."
+        ),
+        "suggested_fix": "Use a dedicated logging module instead of sys.stdout.",
+    }
+    assert is_insufficient_structure_claim(
+        finding_type=issue["finding_type"],
+        target_source=source,
+        target_path="smoke/werkzeug_debug_console.py",
+        message=issue["message"],
+        evidence=issue["evidence"],
+        suggested_fix=issue["suggested_fix"],
+    )
+    assert (
+        _issue_to_finding(
+            "smoke/werkzeug_debug_console.py", issue, target_source=source
+        )
+        is None
+    )
+
+
+def test_stdlib_evidence_dropped_even_when_project_import_exists(
+    tmp_path: Path,
+) -> None:
+    """Resolved project import does not rescue a finding that only cites stdlib."""
+    (tmp_path / ".git").mkdir()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "store.py").write_text("STOCK = {}\n", encoding="utf-8")
+    target = pkg / "handler.py"
+    source = (
+        "import sys\nfrom pkg.store import STOCK\n\n"
+        "def run():\n    sys.stdout.write('x')\n"
+    )
+    target.write_text(source, encoding="utf-8")
+
+    assert is_insufficient_structure_claim(
+        finding_type="layering_violation",
+        target_source=source,
+        target_path=str(target),
+        project_root=tmp_path,
+        evidence="sys.stdout.write is a higher-level output dependency",
+        message="handler should not talk to sys.stdout directly",
+        suggested_fix="route output through a logging layer",
     )
     assert not is_insufficient_structure_claim(
         finding_type="layering_violation",
         target_source=source,
+        target_path=str(target),
+        project_root=tmp_path,
+        evidence="handler imports pkg.store and mutates STOCK past the service",
+        message="handler reaches into the store module",
+        suggested_fix="call the service instead of pkg.store",
+    )
+
+
+def test_real_layering_with_service_boundary_survives_structure_filter() -> None:
+    repo = Path(__file__).resolve().parents[1]
+    path = repo / "benchmark/fixtures/architecture/checkout_handler.py"
+    source = path.read_text(encoding="utf-8")
+    assert not is_insufficient_structure_claim(
+        finding_type="layering_violation",
+        target_source=source,
+        target_path=str(path),
+        project_root=repo,
         evidence=(
             "checkout imports inventory_data_store and mutates STOCK, "
             "bypassing the inventory_service layer"
@@ -329,15 +455,16 @@ def test_real_layering_with_service_boundary_survives_structure_filter() -> None
 
 def test_real_dependency_direction_survives_structure_filter() -> None:
     repo = Path(__file__).resolve().parents[1]
-    source = (
-        repo / "benchmark/fixtures/architecture/low_level_persistence_client.py"
-    ).read_text(encoding="utf-8")
+    path = repo / "benchmark/fixtures/architecture/low_level_persistence_client.py"
+    source = path.read_text(encoding="utf-8")
     assert not is_insufficient_structure_claim(
         finding_type="dependency_direction",
         target_source=source,
+        target_path=str(path),
+        project_root=repo,
         evidence=(
             "The low-level persistence client imports and calls the "
-            "high-level order workflow"
+            "high_level_order_workflow module"
         ),
         message="persistence should not depend upward on the workflow",
         suggested_fix="Have the workflow call the persistence client",
@@ -392,8 +519,13 @@ def _fake_response(content: str) -> SimpleNamespace:
 def test_run_architecture_worker_maps_mocked_llm_issues(
     tmp_path: Path, monkeypatch
 ) -> None:
-    target = tmp_path / "service.py"
-    # First-party import gives enough layer surface for a structure claim.
+    (tmp_path / ".git").mkdir()
+    pkg = tmp_path / "app"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "ui.py").write_text("def render():\n    return None\n", encoding="utf-8")
+    target = pkg / "service.py"
+    # Resolved project import + evidence that cites it.
     target.write_text(
         "from app.ui import render\n\ndef do_thing():\n    render()\n",
         encoding="utf-8",
@@ -408,13 +540,14 @@ def test_run_architecture_worker_maps_mocked_llm_issues(
         lambda *args, **kwargs: _fake_response(
             '{"has_issues": true, "summary": "1 layering issue", '
             '"issues": [{"finding_type": "layering_violation", "confidence": 88, '
-            '"location": "service.py:1", "evidence": "imports UI module directly", '
+            '"location": "service.py:1", '
+            '"evidence": "service imports app.ui directly", '
             '"message": "service layer depends on UI", '
             '"suggested_fix": "invert the dependency"}]}'
         ),
     )
 
-    result = run_architecture_worker(str(target))
+    result = run_architecture_worker(str(target), project_root=str(tmp_path))
 
     assert result["has_issues"] is True
     assert result["failures"] == 0
@@ -549,6 +682,7 @@ def test_run_architecture_worker_treats_llm_error_as_clean(
 
 _CHECKOUT = "benchmark/fixtures/architecture/checkout_handler.py"
 _PERSISTENCE = "benchmark/fixtures/architecture/low_level_persistence_client.py"
+_REPO = Path(__file__).resolve().parents[1]
 _CHECKOUT_SOURCE = Path(_CHECKOUT).read_text(encoding="utf-8")
 _PERSISTENCE_SOURCE = Path(_PERSISTENCE).read_text(encoding="utf-8")
 _ARCH_CONTEXT = [
@@ -588,6 +722,7 @@ def test_sibling_dependency_finding_dropped_when_reviewing_checkout() -> None:
         },
         context_files=_ARCH_CONTEXT,
         target_source=_CHECKOUT_SOURCE,
+        project_root=_REPO,
     )
     assert finding is None
     assert is_off_target_finding(
@@ -619,6 +754,7 @@ def test_sibling_layering_finding_dropped_when_reviewing_persistence() -> None:
         },
         context_files=_ARCH_CONTEXT,
         target_source=_PERSISTENCE_SOURCE,
+        project_root=_REPO,
     )
     assert finding is None
 
@@ -642,6 +778,7 @@ def test_checkout_keeps_its_own_layering_finding() -> None:
         },
         context_files=_ARCH_CONTEXT,
         target_source=_CHECKOUT_SOURCE,
+        project_root=_REPO,
     )
     assert finding is not None
     assert finding.finding_type == "layering_violation"
@@ -657,7 +794,7 @@ def test_persistence_keeps_its_own_dependency_finding() -> None:
             "location": "low_level_persistence_client.py:write_record",
             "evidence": (
                 "The low-level persistence client imports and calls back into "
-                "the high-level order workflow after every write."
+                "high_level_order_workflow.finalize_order after every write."
             ),
             "message": (
                 "The low-level persistence client should not depend on the "
@@ -667,6 +804,7 @@ def test_persistence_keeps_its_own_dependency_finding() -> None:
         },
         context_files=_ARCH_CONTEXT,
         target_source=_PERSISTENCE_SOURCE,
+        project_root=_REPO,
     )
     assert finding is not None
     assert finding.finding_type == "dependency_direction"
@@ -687,6 +825,7 @@ def test_symbol_only_own_finding_survives_via_content_match() -> None:
         },
         context_files=_ARCH_CONTEXT,
         target_source=_CHECKOUT_SOURCE,
+        project_root=_REPO,
     )
     assert finding is not None
     assert finding.finding_type == "layering_violation"

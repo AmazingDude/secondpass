@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from app.context import gather_cross_file_context
+from app.context import classify_imports, gather_cross_file_context
 
 
 def _write(path: Path, content: str) -> None:
@@ -118,6 +118,55 @@ def test_architecture_fixture_package_keeps_sibling_context() -> None:
 
     sibling = "benchmark/fixtures/architecture/low_level_persistence_client.py"
     assert by_path[sibling].relation == "same_package"
+
+
+def test_classify_imports_splits_stdlib_project_and_external(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    pkg = tmp_path / "pkg"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "store.py").write_text("STOCK = {}\n", encoding="utf-8")
+    target = pkg / "handler.py"
+    source = (
+        "import sys\n"
+        "from django.db import models\n"
+        "from pkg.store import STOCK\n"
+    )
+    target.write_text(source, encoding="utf-8")
+
+    facts = classify_imports(source, target_path=target, project_root=tmp_path)
+    by_module = {fact.module: fact for fact in facts}
+
+    assert by_module["sys"].kind == "stdlib"
+    assert by_module["django.db"].kind == "unresolved_external"
+    assert by_module["pkg.store"].kind == "resolved_project"
+    assert by_module["pkg.store"].resolved_path.replace("\\", "/").endswith("pkg/store.py")
+
+
+def test_classify_imports_resolves_relative_when_sibling_exists(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    pkg = tmp_path / "debug"
+    pkg.mkdir()
+    (pkg / "__init__.py").write_text("", encoding="utf-8")
+    (pkg / "repr.py").write_text("def debug_repr(x): return x\n", encoding="utf-8")
+    target = pkg / "console.py"
+    source = "import sys\nfrom .repr import debug_repr\n"
+    target.write_text(source, encoding="utf-8")
+
+    facts = classify_imports(source, target_path=target, project_root=tmp_path)
+    resolved = [fact for fact in facts if fact.kind == "resolved_project"]
+    assert any(fact.module.endswith("repr") or "repr" in fact.module for fact in resolved)
+
+
+def test_classify_imports_marks_missing_relative_unresolved(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    target = tmp_path / "console.py"
+    source = "import sys\nfrom .repr import debug_repr\n"
+    target.write_text(source, encoding="utf-8")
+
+    facts = classify_imports(source, target_path=target, project_root=tmp_path)
+    assert all(fact.kind != "resolved_project" for fact in facts)
+    assert any(fact.kind == "unresolved_external" for fact in facts)
 
 
 def test_project_root_auto_detected_via_git(tmp_path: Path) -> None:
