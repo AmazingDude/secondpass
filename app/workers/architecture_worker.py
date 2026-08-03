@@ -613,15 +613,21 @@ def run_architecture_worker(
                     structured_findings.append(finding)
 
         # Guard: model claimed issues but gave nothing specific → clean.
+        # Filters (authz bleed, soft smell, off-target, insufficient-structure)
+        # may drop every issue while the LLM summary still describes the claim.
+        # Keep that claim in the agent_event log; neutralize the user-facing summary.
         if has_issues and not structured_findings:
             has_issues = False
-            summary = summary or "No architecture issues found."
             log_agent_event(
                 "architecture_worker claimed issues but produced none specific; "
                 "treating as clean"
             )
-
-        if not has_issues:
+            log_agent_event(
+                f"architecture_worker: clean — "
+                f"{summary or 'No architecture issues found.'}"
+            )
+            summary = "No architecture issues found."
+        elif not has_issues:
             summary = summary or "No architecture issues found."
             log_agent_event(f"architecture_worker: clean — {summary}")
         else:

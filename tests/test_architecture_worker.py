@@ -478,7 +478,51 @@ def test_run_architecture_worker_treats_ungrounded_claim_as_clean(
 
     assert result["has_issues"] is False
     assert result["structured_findings"] == []
+    assert result["summary"] == "No architecture issues found."
 
+
+def test_filtered_claim_does_not_leak_into_user_facing_summary(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """Authz-bleed (etc.) drops the finding; panel body must not echo the claim."""
+    target = tmp_path / "notes.py"
+    target.write_text(
+        "def get_note(note_id, user_id):\n    return NOTES[note_id]\n",
+        encoding="utf-8",
+    )
+    events: list[str] = []
+
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.gather_cross_file_context",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.chat",
+        lambda *args, **kwargs: _fake_response(
+            '{"has_issues": true, '
+            '"summary": "The target file has a layering violation due to a '
+            'missing ownership check", '
+            '"issues": [{'
+            '"finding_type": "layering_violation", '
+            '"evidence": "get_note lacks an ownership check before returning NOTES", '
+            '"confidence": 90, '
+            '"suggested_fix": "Verify the note belongs to the caller."'
+            "}]}"
+        ),
+    )
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.log_agent_event",
+        lambda message, **kwargs: events.append(message),
+    )
+
+    result = run_architecture_worker(str(target))
+
+    assert result["has_issues"] is False
+    assert result["structured_findings"] == []
+    assert result["summary"] == "No architecture issues found."
+    assert "ownership" not in result["summary"].lower()
+    assert any("missing ownership check" in event for event in events)
+    assert any("claimed issues but produced none specific" in event for event in events)
 
 def test_run_architecture_worker_treats_llm_error_as_clean(
     tmp_path: Path, monkeypatch
