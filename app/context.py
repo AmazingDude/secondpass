@@ -85,7 +85,7 @@ def gather_cross_file_context(
     """Gather a small, deterministic set of files related to ``target_path``.
 
     Priority order: first-party imports of the target, sibling files in the
-    same package/directory, then files elsewhere in the target's top-level
+    same explicit package, then files elsewhere in the target's top-level
     package that import the target back ("callers"). This is a text/AST
     heuristic, not a full dependency graph — deterministic and bounded so a
     layering call has real cross-file evidence without unbounded LLM input.
@@ -107,7 +107,7 @@ def gather_cross_file_context(
             ordered.append((resolved, "imported_by_target"))
             seen.add(resolved)
 
-    if target.parent.is_dir():
+    if target.parent.is_dir() and (target.parent / "__init__.py").is_file():
         for sibling in sorted(target.parent.glob("*.py")):
             if sibling not in seen and sibling.name != "__init__.py":
                 ordered.append((sibling, "same_package"))

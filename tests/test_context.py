@@ -95,6 +95,31 @@ def test_target_with_no_local_imports_returns_only_siblings_and_callers(
     assert "same_package" in relations
 
 
+def test_loose_directory_does_not_create_same_package_context(tmp_path: Path) -> None:
+    (tmp_path / ".git").mkdir()
+    loose = tmp_path / "loose"
+    _write(loose / "target.py", "import json\n\nVALUE = json.dumps({})\n")
+    _write(loose / "unrelated.py", "def unrelated():\n    return 1\n")
+
+    context = gather_cross_file_context(
+        loose / "target.py", project_root=tmp_path, max_files=10
+    )
+
+    assert all(item.relation != "same_package" for item in context)
+    assert all(not item.path.replace("\\", "/").endswith("unrelated.py") for item in context)
+
+
+def test_architecture_fixture_package_keeps_sibling_context() -> None:
+    root = Path(__file__).resolve().parents[1]
+    target = root / "benchmark" / "fixtures" / "architecture" / "checkout_handler.py"
+
+    context = gather_cross_file_context(target, project_root=root, max_files=10)
+    by_path = {item.path.replace("\\", "/"): item for item in context}
+
+    sibling = "benchmark/fixtures/architecture/low_level_persistence_client.py"
+    assert by_path[sibling].relation == "same_package"
+
+
 def test_project_root_auto_detected_via_git(tmp_path: Path) -> None:
     root = _make_project(tmp_path)
     target = root / "pkg" / "a.py"
