@@ -181,5 +181,7 @@ def test_logic_review_degrades_on_rate_limit(monkeypatch, tmp_path) -> None:
 
     result = assess_logic_review(str(target))
     assert result["has_issues"] is False
-    assert result["summary"] == "skipped — rate limited"
+    assert result["inconclusive"] is True
+    assert result["status"] == "inconclusive"
+    assert result["summary"] == "inconclusive — rate limited"
     assert result["failures"] == 1

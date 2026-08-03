@@ -182,6 +182,11 @@ def _display_report(report: dict[str, Any]) -> None:
             f"\n{err}" if err.lower().startswith("semgrep") else f"\nStatic scan error (continued): {err}",
             style="yellow",
         )
+    elif report.get("used_logic_fallback") and report.get("inconclusive"):
+        header.append(
+            "\nStatic scan empty — logic review inconclusive",
+            style="yellow",
+        )
     elif report.get("used_logic_fallback") and report.get("no_issues"):
         header.append(
             "\nStatic scan empty — logic review found no issues",
@@ -192,8 +197,24 @@ def _display_report(report: dict[str, Any]) -> None:
             "\nStatic scan empty — used logic-review fallback",
             style="dim",
         )
+    elif report.get("used_logic_review") and not report.get("static_scan_empty"):
+        header.append(
+            "\nStatic scan + logic review (additive)",
+            style="dim",
+        )
     elif report.get("static_scan_empty"):
         header.append("\nStatic scan reported no issues", style="dim")
+
+    if report.get("inconclusive"):
+        header.append(
+            f"\nCoverage: inconclusive — {report.get('message') or 'logic review incomplete'}",
+            style="yellow",
+        )
+    if report.get("source_truncated"):
+        note = report.get("source_truncated_note") or (
+            "Logic review input was truncated."
+        )
+        header.append(f"\n{note}", style="yellow")
 
     console.print(Panel.fit(header, border_style="white"))
 
@@ -214,18 +235,22 @@ def _display_report(report: dict[str, Any]) -> None:
                 )
             if filtered_out and "outside" not in detail.lower():
                 detail += f"\n({filtered_out} finding(s) were outside the changed line ranges.)"
+            title = "Review incomplete" if report.get("inconclusive") else "No issues found"
+            style = "yellow" if report.get("inconclusive") else "green"
             console.print(
                 Panel(
-                    Text(detail, style="green"),
-                    title="No issues found",
-                    border_style="green",
+                    Text(detail, style=style),
+                    title=title,
+                    border_style=style,
                     padding=(1, 2),
                 )
             )
         else:
             detail = str(report.get("message") or "").strip()
             if not detail:
-                if report.get("used_logic_fallback"):
+                if report.get("inconclusive"):
+                    detail = "inconclusive — logic review could not complete"
+                elif report.get("used_logic_fallback") or report.get("used_logic_review"):
                     detail = "No security issues found."
                 else:
                     detail = (
@@ -233,11 +258,13 @@ def _display_report(report: dict[str, Any]) -> None:
                         "Semgrep reported no issues and there was no source "
                         "content for a logic fallback."
                     )
+            title = "Review incomplete" if report.get("inconclusive") else "No issues found"
+            style = "yellow" if report.get("inconclusive") else "green"
             console.print(
                 Panel(
-                    Text(detail, style="green"),
-                    title="No issues found",
-                    border_style="green",
+                    Text(detail, style=style),
+                    title=title,
+                    border_style=style,
                     padding=(1, 2),
                 )
             )

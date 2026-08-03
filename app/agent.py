@@ -238,11 +238,14 @@ def _source_is_reviewable(path: str) -> bool:
     return bool(text)
 
 
-def _read_source_for_logic(path: str) -> str:
+def _read_source_for_logic(path: str) -> tuple[str, bool]:
+    """Return (source_for_prompt, truncated). Truncation is silent in the text
+    marker but callers must expose the boolean on the report.
+    """
     source = Path(path).read_text(encoding="utf-8")
     if len(source) > _MAX_LOGIC_SOURCE_CHARS:
-        return source[:_MAX_LOGIC_SOURCE_CHARS] + "\n... [truncated]"
-    return source
+        return source[:_MAX_LOGIC_SOURCE_CHARS] + "\n... [truncated]", True
+    return source, False
 
 
 def assess_logic_review(
@@ -250,17 +253,21 @@ def assess_logic_review(
     *,
     scan_note: str | None = None,
 ) -> dict[str, Any]:
-    """LLM gate: real logic issues, or an honest clean result.
+    """LLM gate: real logic issues, honest clean, or explicit inconclusive.
 
     Returns:
       {
         "has_issues": bool,
         "summary": str,
-        "findings": list[Finding],  # empty when clean
+        "findings": list[Finding],
+        "structured_findings": list[StructuredFinding],
         "failures": int,
+        "inconclusive": bool,
+        "source_truncated": bool,
+        "status": "clean" | "issues" | "inconclusive",
       }
     """
-    source = _read_source_for_logic(path)
+    source, source_truncated = _read_source_for_logic(path)
     note = scan_note or "Semgrep reported no issues for this path."
     failures = 0
 
@@ -287,25 +294,31 @@ def assess_logic_review(
             )
         except LLMRateLimitedError:
             failures += 1
-            log_agent_event("logic-review skipped — rate limited")
+            log_agent_event("logic-review inconclusive — rate limited")
             return {
                 "has_issues": False,
-                "summary": "skipped — rate limited",
+                "summary": "inconclusive — rate limited",
                 "findings": [],
                 "structured_findings": [],
                 "failures": failures,
+                "inconclusive": True,
+                "source_truncated": source_truncated,
+                "status": "inconclusive",
             }
         except Exception as exc:  # noqa: BLE001
             failures += 1
-            log_agent_event(f"logic-review assessment failed ({exc}); treating as clean")
+            log_agent_event(
+                f"logic-review assessment failed ({exc}); marking inconclusive"
+            )
             return {
                 "has_issues": False,
-                "summary": (
-                    "Logic review could not complete; no concrete issue confirmed."
-                ),
+                "summary": "inconclusive — logic review could not complete",
                 "findings": [],
                 "structured_findings": [],
                 "failures": failures,
+                "inconclusive": True,
+                "source_truncated": source_truncated,
+                "status": "inconclusive",
             }
 
         content = response.choices[0].message.content or ""
@@ -366,6 +379,9 @@ def assess_logic_review(
                 "findings": [],
                 "structured_findings": [],
                 "failures": failures,
+                "inconclusive": False,
+                "source_truncated": source_truncated,
+                "status": "clean",
             }
 
         log_agent_event(f"logic-review: {len(findings)} concrete issue(s) — {summary}")
@@ -375,6 +391,9 @@ def assess_logic_review(
             "findings": findings,
             "structured_findings": structured_findings,
             "failures": failures,
+            "inconclusive": False,
+            "source_truncated": source_truncated,
+            "status": "issues",
         }
 
 
@@ -471,12 +490,24 @@ def _empty_report(
     used_logic_fallback: bool,
     message: str,
     tool_call_failures: int = 0,
+    inconclusive: bool = False,
+    source_truncated: bool = False,
+    used_logic_review: bool = False,
+    logic_review_status: str | None = None,
 ) -> dict[str, Any]:
     review_result, gate_result, accepted, needs_review = build_security_review_output(
         target,
         [],
         [],
     )
+    truncated_note = (
+        f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
+        if source_truncated
+        else None
+    )
+    status = logic_review_status
+    if status is None:
+        status = "inconclusive" if inconclusive else "clean"
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -485,7 +516,12 @@ def _empty_report(
         "static_scan_empty": scan_empty and scan_error is None,
         "static_scan_error": scan_error,
         "used_logic_fallback": used_logic_fallback,
-        "no_issues": True,
+        "used_logic_review": used_logic_review or used_logic_fallback,
+        "no_issues": not inconclusive,
+        "inconclusive": inconclusive,
+        "logic_review_status": status,
+        "source_truncated": source_truncated,
+        "source_truncated_note": truncated_note,
         "message": message,
         "tool_call_failures": tool_call_failures,
         **_structured_report_fields(
@@ -513,46 +549,88 @@ def review_code(
     seed_memory()
 
     scan_error: str | None = None
-    findings: list[ScannerFinding] = []
+    scan_findings: list[ScannerFinding] = []
     _emit_stage(on_stage, "scanning")
     with agent_scope("supervisor"):
         log_agent_event(f"supervisor starting review of {target}")
         try:
-            findings = run_static_scan([target])
+            scan_findings = run_static_scan([target])
         except ScanError as exc:
             scan_error = str(exc)
-            findings = []
+            scan_findings = []
             log_agent_event(f"supervisor scan error: {scan_error}")
 
-    scan_empty = not findings
-    structured_findings = [map_semgrep_finding(finding) for finding in findings]
+    scan_empty = not scan_findings
+    structured_from_scan = [map_semgrep_finding(finding) for finding in scan_findings]
+
     used_logic_fallback = False
+    used_logic_review = False
     logic_failures = 0
     logic_summary: str | None = None
+    logic_inconclusive = False
+    source_truncated = False
+    logic_review_status: str | None = None
+    logic_findings: list[ScannerFinding] = []
+    logic_structured: list[StructuredFinding] = []
 
-    if scan_empty and _source_is_reviewable(target):
-        used_logic_fallback = True
+    if _source_is_reviewable(target):
+        used_logic_review = True
+        # Legacy flag: logic ran because static was empty/unavailable.
+        used_logic_fallback = scan_empty
         _emit_stage(on_stage, "logic_review")
-        scan_note = (
-            f"Static scan unavailable ({scan_error}). Review the source carefully."
-            if scan_error
-            else "Semgrep reported no issues for this path."
-        )
+        if scan_error:
+            scan_note = (
+                f"Static scan unavailable ({scan_error}). Review the source carefully."
+            )
+        elif scan_findings:
+            scan_note = (
+                f"Semgrep reported {len(scan_findings)} static finding(s). "
+                "Look for ADDITIONAL logic / authorization bugs in this source "
+                "that those rules do not already cover. Do not restate the "
+                "static findings."
+            )
+        else:
+            scan_note = "Semgrep reported no issues for this path."
         assessment = assess_logic_review(target, scan_note=scan_note)
         logic_failures = int(assessment.get("failures") or 0)
         logic_summary = str(assessment.get("summary") or "")
-        if not assessment.get("has_issues"):
-            _emit_stage(on_stage, "building_report")
+        logic_inconclusive = bool(assessment.get("inconclusive"))
+        source_truncated = bool(assessment.get("source_truncated"))
+        logic_review_status = str(assessment.get("status") or "") or None
+        if assessment.get("has_issues"):
+            logic_findings = list(assessment.get("findings") or [])
+            logic_structured = list(assessment.get("structured_findings") or [])
+
+    findings = [*scan_findings, *logic_findings]
+    structured_findings = [*structured_from_scan, *logic_structured]
+
+    if not findings:
+        _emit_stage(on_stage, "building_report")
+        if logic_inconclusive:
             return _empty_report(
                 target,
                 scan_error=scan_error,
                 scan_empty=scan_empty,
-                used_logic_fallback=True,
-                message=logic_summary or "No security issues found.",
+                used_logic_fallback=used_logic_fallback,
+                used_logic_review=used_logic_review,
+                message=logic_summary or "inconclusive — logic review could not complete",
                 tool_call_failures=logic_failures,
+                inconclusive=True,
+                source_truncated=source_truncated,
+                logic_review_status=logic_review_status or "inconclusive",
             )
-        findings = list(assessment.get("findings") or [])
-        structured_findings = list(assessment.get("structured_findings") or [])
+        return _empty_report(
+            target,
+            scan_error=scan_error,
+            scan_empty=scan_empty,
+            used_logic_fallback=used_logic_fallback,
+            used_logic_review=used_logic_review,
+            message=logic_summary or "No security issues found.",
+            tool_call_failures=logic_failures,
+            inconclusive=False,
+            source_truncated=source_truncated,
+            logic_review_status=logic_review_status or ("clean" if used_logic_review else None),
+        )
 
     if findings:
         _emit_stage(on_stage, "workers")
@@ -566,6 +644,21 @@ def review_code(
         reviewed,
         structured_findings,
     )
+    truncated_note = (
+        f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
+        if source_truncated
+        else None
+    )
+    message: str | None
+    if logic_inconclusive:
+        message = logic_summary or "inconclusive — logic review could not complete"
+    elif used_logic_review and logic_summary and logic_findings:
+        message = logic_summary
+    elif not reviewed:
+        message = "No security issues found."
+    else:
+        message = None
+
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -574,12 +667,14 @@ def review_code(
         "static_scan_empty": scan_empty and scan_error is None,
         "static_scan_error": scan_error,
         "used_logic_fallback": used_logic_fallback,
-        "no_issues": len(reviewed) == 0,
-        "message": (
-            logic_summary
-            if used_logic_fallback and not reviewed
-            else (None if reviewed else "No security issues found.")
-        ),
+        "used_logic_review": used_logic_review,
+        "no_issues": len(reviewed) == 0 and not logic_inconclusive,
+        "inconclusive": logic_inconclusive,
+        "logic_review_status": logic_review_status
+        or ("issues" if logic_findings else ("clean" if used_logic_review else None)),
+        "source_truncated": source_truncated,
+        "source_truncated_note": truncated_note,
+        "message": message,
         "tool_call_failures": logic_failures
         + sum(int(item.get("tool_call_failures") or 0) for item in reviewed),
         **_structured_report_fields(
@@ -605,10 +700,13 @@ def review_changed_files(
     combined: list[dict[str, Any]] = []
     scan_errors: list[str] = []
     used_logic_fallback = False
+    used_logic_review = False
     static_scan_empty = True
     filtered_out = 0
     clean_messages: list[str] = []
     failures = 0
+    any_inconclusive = False
+    any_truncated = False
 
     for changed in files:
         report = review_code(
@@ -623,8 +721,16 @@ def review_changed_files(
             static_scan_empty = False
         if report.get("used_logic_fallback"):
             used_logic_fallback = True
-        if report.get("no_issues") and report.get("message"):
+        if report.get("used_logic_review"):
+            used_logic_review = True
+        if report.get("inconclusive"):
+            any_inconclusive = True
+            if report.get("message"):
+                clean_messages.append(f"{changed.path}: {report['message']}")
+        elif report.get("no_issues") and report.get("message"):
             clean_messages.append(f"{changed.path}: {report['message']}")
+        if report.get("source_truncated"):
+            any_truncated = True
 
         for item in report.get("all_findings") or []:
             finding = item.get("finding") or {}
@@ -648,16 +754,23 @@ def review_changed_files(
     )
 
     _emit_stage(on_stage, "building_report")
-    no_issues = len(combined) == 0
+    no_issues = len(combined) == 0 and not any_inconclusive
     message = None
-    if no_issues:
+    if any_inconclusive and len(combined) == 0:
+        message = next(
+            (
+                text.split(": ", 1)[-1]
+                for text in clean_messages
+                if "inconclusive" in text.lower()
+            ),
+            "inconclusive — logic review could not complete",
+        )
+    elif len(combined) == 0:
         if filtered_out:
             message = (
                 "No findings on the changed lines "
                 f"({filtered_out} finding(s) outside changed ranges)."
             )
-        elif clean_messages:
-            message = "No security issues found."
         else:
             message = "No security issues found."
 
@@ -669,7 +782,16 @@ def review_changed_files(
         "static_scan_empty": static_scan_empty and not scan_errors,
         "static_scan_error": "; ".join(scan_errors) if scan_errors else None,
         "used_logic_fallback": used_logic_fallback,
+        "used_logic_review": used_logic_review,
         "no_issues": no_issues,
+        "inconclusive": any_inconclusive,
+        "logic_review_status": "inconclusive" if any_inconclusive else None,
+        "source_truncated": any_truncated,
+        "source_truncated_note": (
+            f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
+            if any_truncated
+            else None
+        ),
         "message": message,
         "tool_call_failures": failures,
         "diff_mode": mode,

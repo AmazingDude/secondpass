@@ -74,6 +74,9 @@ def test_review_code_surfaces_clean_semgrep_message(monkeypatch, tmp_path) -> No
             "findings": [],
             "structured_findings": [],
             "failures": 0,
+            "inconclusive": False,
+            "source_truncated": False,
+            "status": "clean",
         },
     )
     monkeypatch.setattr("app.agent.seed_memory", lambda: None)
@@ -86,3 +89,5 @@ def test_review_code_surfaces_clean_semgrep_message(monkeypatch, tmp_path) -> No
     )
     assert "Traceback" not in (report["static_scan_error"] or "")
     assert report.get("used_logic_fallback") is True
+    assert report.get("inconclusive") is False
+    assert report.get("no_issues") is True

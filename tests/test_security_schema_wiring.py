@@ -133,6 +133,19 @@ def test_review_code_returns_schema_and_gate_json_offline(
     monkeypatch.setattr("app.agent.seed_memory", lambda: 0)
     monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [raw])
     monkeypatch.setattr(
+        "app.agent.assess_logic_review",
+        lambda path, scan_note=None: {
+            "has_issues": False,
+            "summary": "No security issues found.",
+            "findings": [],
+            "structured_findings": [],
+            "failures": 0,
+            "inconclusive": False,
+            "source_truncated": False,
+            "status": "clean",
+        },
+    )
+    monkeypatch.setattr(
         "app.agent._review_finding",
         lambda finding, max_iterations: _reviewed(
             finding,
@@ -151,3 +164,5 @@ def test_review_code_returns_schema_and_gate_json_offline(
     assert report["accepted"][0]["structured_finding"]["finding_type"] == (
         "python.lang.security.audit.subprocess-shell-true"
     )
+    assert report.get("used_logic_review") is True
+    assert report.get("inconclusive") is False
