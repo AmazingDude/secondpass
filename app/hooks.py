@@ -13,11 +13,25 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Iterator, TypeVar
 
+from rich.console import Console
+from rich.text import Text
+
 F = TypeVar("F", bound=Callable[..., Any])
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_LOG_PATH = _ROOT / "tool_calls.log"
 _MAX_ARG_CHARS = 400
+
+# Live stderr only (file logs keep full ISO timestamps / plain text).
+_stderr_console = Console(
+    file=sys.stderr,
+    highlight=False,
+    soft_wrap=True,
+    legacy_windows=False,
+)
+_AGENT_FIELD_WIDTH = 28  # "agent=architecture_worker"
+_TOOL_FIELD_WIDTH = 24  # "tool=run_static_scan"
+_KIND_FIELD_WIDTH = 12  # "agent_event"
 
 # Which multi-agent role is currently executing (supervisor / memory_worker / …).
 _current_agent: ContextVar[str] = ContextVar("secondpass_agent", default="system")
@@ -37,11 +51,56 @@ def agent_scope(agent_name: str) -> Iterator[None]:
         _current_agent.reset(token)
 
 
+def _live_clock(now: datetime) -> str:
+    return now.strftime("%H:%M:%S")
+
+
+def _print_agent_stderr(now: datetime, message: str) -> None:
+    line = Text()
+    line.append("[agent]", style="bold cyan")
+    line.append(" ")
+    line.append(_live_clock(now), style="dim")
+    line.append(" | ", style="dim")
+    line.append(f"{'agent_event':<{_KIND_FIELD_WIDTH}}", style="cyan")
+    line.append(" | ", style="dim")
+    line.append(message, style="cyan")
+    _stderr_console.print(line)
+
+
+def _print_tool_stderr(
+    now: datetime,
+    *,
+    agent_name: str,
+    tool_name: str,
+    status: str,
+    duration_ms: float,
+    args_text: str,
+) -> None:
+    agent_field = f"agent={agent_name}"
+    tool_field = f"tool={tool_name}"
+    line = Text()
+    line.append("[tool] ", style="bold magenta")  # pad to same width as [agent]
+    line.append(_live_clock(now), style="dim")
+    line.append(" | ", style="dim")
+    line.append(f"{agent_field:<{_AGENT_FIELD_WIDTH}}", style="magenta")
+    line.append(" | ", style="dim")
+    line.append(f"{tool_field:<{_TOOL_FIELD_WIDTH}}", style="magenta")
+    line.append(" | ", style="dim")
+    status_style = "red" if status.startswith("error=") else "green"
+    line.append(f"{status:<18}", style=status_style)
+    line.append(" | ", style="dim")
+    line.append(f"duration_ms={duration_ms:.1f}", style="dim")
+    line.append(" | ", style="dim")
+    line.append(f"args={args_text}", style="dim")
+    _stderr_console.print(line)
+
+
 def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_PATH) -> None:
     """Log a multi-agent hand-off or decision (not a tool call)."""
-    timestamp = datetime.now(timezone.utc).isoformat()
+    now = datetime.now(timezone.utc)
+    timestamp = now.isoformat()
     line = f"{timestamp} | agent_event | {message}"
-    print(f"[agent] {line}", file=sys.stderr, flush=True)
+    _print_agent_stderr(now, message)
     if log_file is not None:
         path = Path(log_file)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -89,15 +148,23 @@ def log_tool_call(
                 raise
             finally:
                 elapsed_ms = (time.perf_counter() - started) * 1000
-                timestamp = datetime.now(timezone.utc).isoformat()
+                now = datetime.now(timezone.utc)
+                timestamp = now.isoformat()
                 status = f"error={type(error).__name__}" if error else "ok"
+                args_text = _format_args(args, kwargs)
                 line = (
                     f"{timestamp} | agent={agent_name} | tool={tool_name} | "
                     f"{status} | duration_ms={elapsed_ms:.1f} | "
-                    f"args={_format_args(args, kwargs)}"
+                    f"args={args_text}"
                 )
-                # stderr keeps stdout clean for MCP stdio JSON-RPC; CLIs still show logs.
-                print(f"[tool] {line}", file=sys.stderr, flush=True)
+                _print_tool_stderr(
+                    now,
+                    agent_name=agent_name,
+                    tool_name=tool_name,
+                    status=status,
+                    duration_ms=elapsed_ms,
+                    args_text=args_text,
+                )
                 if log_file is not None:
                     path = Path(log_file)
                     path.parent.mkdir(parents=True, exist_ok=True)
