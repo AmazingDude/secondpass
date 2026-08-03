@@ -11,6 +11,27 @@ from typing import TypedDict
 
 from app.hooks import log_tool_call
 
+# Substrings seen in real Semgrep stderr when rule packs fail to download (§21 DNS).
+_NETWORK_MARKERS = (
+    "getaddrinfo",
+    "name or service not known",
+    "nodename nor servname",
+    "failed to resolve",
+    "max retries exceeded",
+    "max retries",
+    "connection refused",
+    "connection aborted",
+    "connection reset",
+    "timed out",
+    "timeout",
+    "temporary failure in name resolution",
+    "network is unreachable",
+    "semgrep.dev",
+    "httpsconnectionpool",
+    "nameresolutionerror",
+    "newconnectionerror",
+)
+
 
 class Finding(TypedDict):
     rule_id: str
@@ -23,6 +44,23 @@ class Finding(TypedDict):
 
 class ScanError(RuntimeError):
     """Raised when Semgrep cannot complete a scan."""
+
+
+def format_semgrep_failure_message(*, stderr: str = "", stdout: str = "") -> str:
+    """Map Semgrep failure text to a short CLI-safe message (no raw traceback dump)."""
+    detail = (stderr or stdout or "").strip()
+    lowered = detail.lower()
+    if any(marker in lowered for marker in _NETWORK_MARKERS):
+        return "Semgrep scan failed: network error, falling back to logic-review"
+    if not detail:
+        return "Semgrep scan failed"
+    first_line = next(
+        (line.strip() for line in detail.splitlines() if line.strip()),
+        detail,
+    )
+    if len(first_line) > 160:
+        first_line = first_line[:157] + "..."
+    return f"Semgrep scan failed: {first_line}"
 
 
 def _resolve_semgrep() -> str:
@@ -91,10 +129,22 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
             "Semgrep is not installed or is not on PATH. "
             "Install dependencies with: pip install -r requirements.txt"
         ) from exc
+    except subprocess.TimeoutExpired as exc:
+        raise ScanError(
+            "Semgrep scan failed: timed out, falling back to logic-review"
+        ) from exc
+    except OSError as exc:
+        raise ScanError(
+            format_semgrep_failure_message(stderr=str(exc))
+        ) from exc
 
     if completed.returncode != 0:
-        detail = completed.stderr.strip() or completed.stdout.strip()
-        raise ScanError(f"Semgrep scan failed: {detail}")
+        raise ScanError(
+            format_semgrep_failure_message(
+                stderr=completed.stderr or "",
+                stdout=completed.stdout or "",
+            )
+        )
 
     try:
         payload = json.loads(completed.stdout)

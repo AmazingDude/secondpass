@@ -7,7 +7,7 @@ import re
 from typing import Any, Callable
 
 from app.hooks import agent_scope
-from app.llm import chat
+from app.llm import LLMRateLimitedError, chat
 
 try:
     from openai import BadRequestError
@@ -101,6 +101,13 @@ def run_tool_loop(
         for iteration in range(max_iterations):
             try:
                 response = chat(messages, tools=tools, temperature=temperature)
+            except LLMRateLimitedError:
+                failures += 1
+                final = {
+                    "error": "skipped — rate limited",
+                    "rate_limited": True,
+                }
+                break
             except BadRequestError as exc:
                 failures += 1
                 messages.append(

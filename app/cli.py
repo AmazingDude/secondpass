@@ -177,8 +177,9 @@ def _display_report(report: dict[str, Any]) -> None:
                 style="dim",
             )
     if report.get("static_scan_error"):
+        err = str(report["static_scan_error"])
         header.append(
-            f"\nStatic scan error (continued): {report['static_scan_error']}",
+            f"\n{err}" if err.lower().startswith("semgrep") else f"\nStatic scan error (continued): {err}",
             style="yellow",
         )
     elif report.get("used_logic_fallback") and report.get("no_issues"):

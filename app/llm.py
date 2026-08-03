@@ -13,9 +13,18 @@ try:
 except ImportError:  # pragma: no cover
     BadRequestError = Exception  # type: ignore[misc, assignment]
 
+try:
+    from openai import RateLimitError
+except ImportError:  # pragma: no cover
+    RateLimitError = type("RateLimitError", (Exception,), {})  # type: ignore[misc, assignment]
+
 from app.hooks import log_agent_event
 
 load_dotenv()
+
+
+class LLMRateLimitedError(RuntimeError):
+    """Provider returned HTTP 429 / rate limit. Callers should skip this step."""
 
 _PROVIDERS = {
     "groq": {
@@ -76,6 +85,42 @@ def format_temperature_attempt(attempt: float | None) -> str:
 def _is_temperature_reject(exc: BaseException) -> bool:
     text = str(exc).lower()
     return "temperature" in text
+
+
+def _is_rate_limit(exc: BaseException) -> bool:
+    """True for OpenAI-shaped 429s and the Groq TPD messages we hit in benchmarks."""
+    if isinstance(exc, RateLimitError):
+        return True
+    if type(exc).__name__ in {"RateLimitError", "RateLimitExceeded"}:
+        return True
+    if getattr(exc, "status_code", None) == 429:
+        return True
+    text = str(exc).lower()
+    return (
+        "rate_limit" in text
+        or "rate limit" in text
+        or "tokens per day" in text
+        or "tpd" in text
+        or "429" in text
+    )
+
+
+def _log_rate_limited(exc: BaseException) -> None:
+    log_agent_event(
+        f"llm: skipped — rate limited ({type(exc).__name__})"
+    )
+    try:
+        from app.audit import log_audit_stage
+
+        log_audit_stage(
+            "llm_rate_limited",
+            detail={
+                "status": "skipped — rate limited",
+                "error_type": type(exc).__name__,
+            },
+        )
+    except Exception:  # noqa: BLE001 — audit must never break chat()
+        pass
 
 
 def _log_temperature_outcome(
@@ -142,16 +187,19 @@ def chat(
             payload["temperature"] = attempt
         try:
             response = client.chat.completions.create(**payload)
-        except BadRequestError as exc:
-            last_error = exc
-            if not _is_temperature_reject(exc):
-                raise
-            rejected_prior.append(attempt)
-            log_agent_event(
-                "llm temperature: provider rejected "
-                f"{format_temperature_attempt(attempt)} ({exc})"
-            )
-            continue
+        except Exception as exc:
+            if _is_rate_limit(exc):
+                _log_rate_limited(exc)
+                raise LLMRateLimitedError("skipped — rate limited") from exc
+            if isinstance(exc, BadRequestError) and _is_temperature_reject(exc):
+                last_error = exc
+                rejected_prior.append(attempt)
+                log_agent_event(
+                    "llm temperature: provider rejected "
+                    f"{format_temperature_attempt(attempt)} ({exc})"
+                )
+                continue
+            raise
 
         _log_temperature_outcome(
             attempt=attempt,

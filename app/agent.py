@@ -11,7 +11,7 @@ from typing import Any
 from app.confidence_gate import GateResult, apply_confidence_gate
 from app.gitdiff import ChangedFile, finding_in_changed_lines
 from app.hooks import agent_scope, log_agent_event
-from app.llm import chat
+from app.llm import LLMRateLimitedError, chat
 from app.memory import seed_memory
 from app.scanner import Finding as ScannerFinding
 from app.scanner import ScanError, run_static_scan
@@ -285,6 +285,16 @@ def assess_logic_review(
                 tools=None,
                 temperature=0,
             )
+        except LLMRateLimitedError:
+            failures += 1
+            log_agent_event("logic-review skipped — rate limited")
+            return {
+                "has_issues": False,
+                "summary": "skipped — rate limited",
+                "findings": [],
+                "structured_findings": [],
+                "failures": failures,
+            }
         except Exception as exc:  # noqa: BLE001
             failures += 1
             log_agent_event(f"logic-review assessment failed ({exc}); treating as clean")
