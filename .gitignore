@@ -1,7 +1,8 @@
 __pycache__/
 *.py[cod]
 *$py.class
-
+smoke_test_external/
+inspo/
 .env
 .venv/
 venv/
