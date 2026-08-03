@@ -165,7 +165,7 @@ def _display_report(report: dict[str, Any]) -> None:
         style="yellow",
     )
     if report.get("gate_threshold") is not None:
-        header.append(f"  Gate: ≥{report['gate_threshold']}%", style="dim")
+        header.append(f"  Gate: >={report['gate_threshold']}%", style="dim")
     if report.get("diff_mode"):
         header.append(f"\nDiff mode: {report['diff_mode']}")
         changed = report.get("changed_files") or []
@@ -317,7 +317,7 @@ def _display_architecture_report(report: dict[str, Any]) -> None:
         style="yellow",
     )
     if report.get("gate_threshold") is not None:
-        header.append(f"  Gate: ≥{report['gate_threshold']}%", style="dim")
+        header.append(f"  Gate: >={report['gate_threshold']}%", style="dim")
     context_files = report.get("context_files") or []
     if context_files:
         header.append(
@@ -388,7 +388,7 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
         style="yellow",
     )
     if summary.get("gate_threshold") is not None:
-        header.append(f"  Gate: ≥{summary['gate_threshold']}%", style="dim")
+        header.append(f"  Gate: >={summary['gate_threshold']}%", style="dim")
     header.append(
         f"\nSecurity: {summary.get('security_accepted', 0)} accepted / "
         f"{summary.get('security_needs_review', 0)} needs review"
