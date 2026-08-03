@@ -1,0 +1,38 @@
+{
+  "version": "1",
+  "description": "Ground truth for the provenance-backed real-code Security mini-suite (benchmark/real_world/manifest.json). Same {file_path, finding_type} scoring shape as benchmark/ground_truth.json. Fixed/clean counterparts are listed with empty expected findings.",
+  "fixtures": {
+    "benchmark/real_world/cases/aiohttp_static_traversal_vulnerable.py": [
+      {
+        "finding_type": "path_traversal",
+        "symbol": "StaticResource._handle",
+        "line": 87
+      }
+    ],
+    "benchmark/real_world/cases/aiohttp_static_traversal_fixed.py": [],
+    "benchmark/real_world/cases/gitpython_clone_command_injection_vulnerable.py": [
+      {
+        "finding_type": "command_injection",
+        "symbol": "Repo._clone",
+        "line": 60
+      }
+    ],
+    "benchmark/real_world/cases/gitpython_clone_command_injection_fixed.py": [],
+    "benchmark/real_world/cases/django_idor_notes_vulnerable.py": [
+      {
+        "finding_type": "missing_ownership_check",
+        "symbol": "note_detail",
+        "line": 26
+      }
+    ],
+    "benchmark/real_world/cases/django_idor_notes_fixed.py": [],
+    "benchmark/real_world/cases/labelstudio_hardcoded_secret_vulnerable.py": [
+      {
+        "finding_type": "hardcoded_secret",
+        "symbol": "SECRET_KEY",
+        "line": 24
+      }
+    ],
+    "benchmark/real_world/cases/labelstudio_hardcoded_secret_clean.py": []
+  }
+}

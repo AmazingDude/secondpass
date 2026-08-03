@@ -1,0 +1,66 @@
+{
+  "version": "1",
+  "description": "Provenance-backed real-code Security mini-suite. Each vulnerable case cites a real CVE/GHSA advisory or a documented public teaching write-up with a real commit, license, and URL — not an invented label on an arbitrary OSS file. Scope: single-file Security review only (no cross-file Architecture claims scored here).",
+  "cases": [
+    {
+      "id": "aiohttp_static_traversal",
+      "vulnerable_file": "benchmark/real_world/cases/aiohttp_static_traversal_vulnerable.py",
+      "fixed_file": "benchmark/real_world/cases/aiohttp_static_traversal_fixed.py",
+      "source_repo": "https://github.com/aio-libs/aiohttp",
+      "vulnerable_commit": "v3.9.1",
+      "fixed_commit": "v3.9.2",
+      "license": "Apache-2.0",
+      "advisory": "CVE-2024-23334 / GHSA-5h86-8mv2-jq9f",
+      "advisory_url": "https://github.com/advisories/GHSA-5h86-8mv2-jq9f",
+      "fix_reference": "https://github.com/aio-libs/aiohttp/pull/8079",
+      "expected_finding_type": "path_traversal",
+      "why_visible_single_file": "StaticResource._handle skips the filepath.relative_to(self._directory) containment check entirely when follow_symlinks=True, before calling .resolve(). No other file/route participates in the check.",
+      "adaptation_note": "Verbatim class/method excerpt from the tagged source; unrelated methods trimmed for brevity."
+    },
+    {
+      "id": "gitpython_clone_command_injection",
+      "vulnerable_file": "benchmark/real_world/cases/gitpython_clone_command_injection_vulnerable.py",
+      "fixed_file": "benchmark/real_world/cases/gitpython_clone_command_injection_fixed.py",
+      "source_repo": "https://github.com/gitpython-developers/GitPython",
+      "vulnerable_commit": "3.1.29",
+      "fixed_commit": "3.1.30",
+      "license": "BSD-3-Clause",
+      "advisory": "CVE-2022-24439 / GHSA-hcpj-qp55-gfph",
+      "advisory_url": "https://github.com/advisories/GHSA-hcpj-qp55-gfph",
+      "fix_reference": "https://github.com/gitpython-developers/GitPython/pull/1516, https://github.com/gitpython-developers/GitPython/pull/1518",
+      "expected_finding_type": "command_injection",
+      "why_visible_single_file": "Repo._clone passes a caller-controlled url and multi_options straight into the git.clone(...) subprocess call with no protocol allowlist or unsafe-flag denylist. The disclosed PoCs (ext:: URL, --upload-pack= injection) exploit only this function.",
+      "adaptation_note": "Repo._clone body is a close excerpt of git/repo/base.py; a minimal Git stub class was added so the file parses standalone without the full GitPython package installed."
+    },
+    {
+      "id": "django_idor_notes",
+      "vulnerable_file": "benchmark/real_world/cases/django_idor_notes_vulnerable.py",
+      "fixed_file": "benchmark/real_world/cases/django_idor_notes_fixed.py",
+      "source_repo": "https://github.com/thsteixeira/django-security-lab",
+      "vulnerable_commit": "ab9e66e4b749397f2e76784111cf7685084dcf46",
+      "fixed_commit": "ab9e66e4b749397f2e76784111cf7685084dcf46",
+      "license": "MIT",
+      "advisory": "Documented teaching write-up (CWE-639), not a CVE",
+      "advisory_url": "https://thiagoteixeira.tech/blog/broken-access-control-and-idor-when-logging-in-is-not-the-same-as-being-allowed/",
+      "fix_reference": "labs/post_06_idor/views_secure.py in the same commit",
+      "expected_finding_type": "missing_ownership_check",
+      "why_visible_single_file": "note_detail is @login_required but the lookup get_object_or_404(Note, pk=pk) is scoped to the whole table, not request.user. Any authenticated caller reads any note by pk. The fixed twin in the same commit adds owner=request.user.",
+      "adaptation_note": "Docstring/decorator/lookup line verbatim from upstream; inline HTML strings re-wrapped because the fetch used to pull the file stripped angle brackets (logic unchanged)."
+    },
+    {
+      "id": "labelstudio_hardcoded_secret",
+      "vulnerable_file": "benchmark/real_world/cases/labelstudio_hardcoded_secret_vulnerable.py",
+      "fixed_file": "benchmark/real_world/cases/labelstudio_hardcoded_secret_clean.py",
+      "source_repo": "https://github.com/HumanSignal/label-studio",
+      "vulnerable_commit": "1.8.1",
+      "fixed_commit": null,
+      "license": "Apache-2.0",
+      "advisory": "CVE-2023-43791 / GHSA-f475-x83m-rx5m",
+      "advisory_url": "https://github.com/advisories/ghsa-f475-x83m-rx5m",
+      "fix_reference": ">=1.8.2 removed the hardcoded key (per advisory); exact diff not verified against upstream for this suite",
+      "expected_finding_type": "hardcoded_secret",
+      "why_visible_single_file": "Django SECRET_KEY signs session cookies; a literal value here lets anyone reading the source forge a valid session (advisory's own repro uses salted_hmac with the leaked key). No other file is needed.",
+      "adaptation_note": "SECRET_KEY literal and the SECURITY WARNING comment above it are quoted verbatim from the advisory's reproduction steps. Surrounding settings lines are minimal reconstructed boilerplate (NOT a copy of upstream settings.py, which is a large multi-purpose file not verified verbatim). The clean counterpart is a representative env-var control, not an upstream file."
+    }
+  ]
+}
