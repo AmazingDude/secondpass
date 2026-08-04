@@ -11,10 +11,12 @@ venv/
 .secondpass/
 tool_calls.log
 
-# Regenerable; cite scores in prompts.md. Re-run:
+# Regenerable; cite scores in prompts.md / REPORT.md. Re-run:
 #   python -m app.benchmark_run --label …
 #   python -m app.benchmark_run_architecture --label …
+#   python -m app.benchmark_run_real_world --label …
 benchmark/results/*.json
+benchmark/results/_run_*.log
 
 web/node_modules/
 web/dist/
