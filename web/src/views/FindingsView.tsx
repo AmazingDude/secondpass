@@ -69,8 +69,14 @@ export function FindingsView({
 
   const acceptedCount = findings.filter((f) => f.gate === "accepted").length;
   const needsCount = findings.filter((f) => f.gate === "needs_review").length;
+  const coverageIncomplete = reviews.some(
+    (r) => r.review_result.coverage_status === "inconclusive",
+  );
   const cleanWorkers = reviews.filter(
-    (r) => r.accepted_count === 0 && r.needs_review_count === 0,
+    (r) =>
+      r.accepted_count === 0 &&
+      r.needs_review_count === 0 &&
+      r.review_result.coverage_status !== "inconclusive",
   );
 
   return (
@@ -106,6 +112,14 @@ export function FindingsView({
         <span>
           Needs review: <strong>{needsCount}</strong>
         </span>
+        {coverageIncomplete ? (
+          <span
+            className="badge badge-incomplete"
+            title="Logic review did not complete — not the same as a low-confidence finding"
+          >
+            Coverage incomplete
+          </span>
+        ) : null}
         {cleanWorkers.length > 0 && findings.length > 0
           ? cleanWorkers.map((r) => (
               <span
@@ -123,6 +137,15 @@ export function FindingsView({
         <div className="card">
           <p className="empty-detail">
             No findings loaded yet — submit a review or open one from History.
+          </p>
+        </div>
+      ) : findings.length === 0 && coverageIncomplete ? (
+        <div className="card clean-state">
+          <span className="badge badge-incomplete">Review incomplete</span>
+          <p className="empty-detail">
+            Coverage inconclusive — logic review could not complete (for
+            example rate-limited). This is not a clean result, and it is not a
+            low-confidence finding.
           </p>
         </div>
       ) : findings.length === 0 ? (

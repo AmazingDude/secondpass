@@ -34,6 +34,8 @@ export type ReviewPayload = {
     file_path: string;
     timestamp: string;
     worker_name: string;
+    /** Distinct from needs_review: coverage failed (e.g. rate limit), not a low-confidence finding. */
+    coverage_status?: "ok" | "inconclusive" | null;
   };
   gate_result: GateResult;
 };

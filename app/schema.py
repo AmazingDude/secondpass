@@ -35,3 +35,6 @@ class ReviewResult(BaseModel):
     file_path: str
     timestamp: datetime
     worker_name: str
+    # Optional coverage signal (Security path). Distinct from gate needs_review:
+    # inconclusive = logic review did not complete (e.g. rate limit); None/ok = checked.
+    coverage_status: Literal["ok", "inconclusive"] | None = None

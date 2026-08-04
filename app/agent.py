@@ -6,7 +6,7 @@ import os
 from collections.abc import Callable
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.confidence_gate import GateResult, apply_confidence_gate
 from app.gitdiff import ChangedFile, finding_in_changed_lines
@@ -411,6 +411,7 @@ def build_security_review_output(
     structured_findings: list[StructuredFinding],
     *,
     timestamp: datetime | None = None,
+    coverage_status: Literal["ok", "inconclusive"] | None = None,
 ) -> tuple[ReviewResult, GateResult, list[dict[str, Any]], list[dict[str, Any]]]:
     """Attach structured findings and gate the worker-enriched review items."""
     if len(reviewed) != len(structured_findings):
@@ -435,6 +436,7 @@ def build_security_review_output(
         file_path=target,
         timestamp=timestamp or datetime.now(timezone.utc),
         worker_name="security",
+        coverage_status=coverage_status,
     )
     try:
         from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
@@ -499,6 +501,7 @@ def _empty_report(
         target,
         [],
         [],
+        coverage_status="inconclusive" if inconclusive else "ok",
     )
     truncated_note = (
         f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
@@ -643,6 +646,7 @@ def review_code(
         target,
         reviewed,
         structured_findings,
+        coverage_status="inconclusive" if logic_inconclusive else "ok",
     )
     truncated_note = (
         f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
@@ -751,6 +755,7 @@ def review_changed_files(
         f"git diff ({mode})",
         combined,
         combined_structured,
+        coverage_status="inconclusive" if any_inconclusive else "ok",
     )
 
     _emit_stage(on_stage, "building_report")

@@ -286,6 +286,7 @@ def aggregate_worker_reports(
     tool_failures = int(security_report.get("tool_call_failures") or 0) + int(
         (architecture_report or {}).get("tool_call_failures") or 0
     )
+    security_inconclusive = bool(security_report.get("inconclusive"))
 
     summary = {
         "security_accepted": sec_accepted,
@@ -296,7 +297,10 @@ def aggregate_worker_reports(
         "needs_review_count": overall_needs,
         "finding_count": overall_accepted + overall_needs,
         "architecture_skipped": arch_skipped,
-        "no_issues": overall_accepted == 0 and overall_needs == 0,
+        "no_issues": overall_accepted == 0
+        and overall_needs == 0
+        and not security_inconclusive,
+        "inconclusive": security_inconclusive,
         "workers_run": workers_run,
         "tool_call_failures": tool_failures,
         "gate_threshold": security_report.get("gate_threshold")

@@ -136,6 +136,7 @@ def test_rate_limited_logic_review_is_not_clean_success(
     assert report.get("logic_review_status") == "inconclusive"
     assert "inconclusive" in (report.get("message") or "").lower()
     assert "rate limited" in (report.get("message") or "").lower()
+    assert (report.get("review_result") or {}).get("coverage_status") == "inconclusive"
 
 
 def test_assess_logic_review_rate_limit_marks_inconclusive(

@@ -123,8 +123,16 @@ export function HistoryView({ onOpenReview }: Props) {
                       {shortPath(review.file_path)}
                     </td>
                     <td className="history-col-gate">
-                      {review.accepted_count === 0 &&
-                      review.needs_review_count === 0 ? (
+                      {review.review_result.coverage_status ===
+                      "inconclusive" ? (
+                        <span
+                          className="badge badge-incomplete"
+                          title="Logic review did not complete — not a clean result"
+                        >
+                          Incomplete
+                        </span>
+                      ) : review.accepted_count === 0 &&
+                        review.needs_review_count === 0 ? (
                         <span className="badge badge-clean">Clean</span>
                       ) : (
                         <span className="badge badge-gate-summary">

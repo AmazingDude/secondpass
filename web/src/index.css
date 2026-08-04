@@ -543,6 +543,13 @@ a {
   border: 1px solid color-mix(in srgb, var(--text-secondary) 55%, transparent);
 }
 
+/* Coverage incomplete (rate-limit / degraded) — not the same as needs_review */
+.badge-incomplete {
+  background: transparent;
+  color: #a15c00;
+  border: 1px solid color-mix(in srgb, #a15c00 55%, transparent);
+}
+
 .badge-ai {
   background: var(--accent-lavender);
   color: #fff;
