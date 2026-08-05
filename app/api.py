@@ -76,8 +76,8 @@ def _serialize_review(stored: Any) -> dict[str, Any]:
     }
 
 
-def _serialize_outcome(stored: Any) -> dict[str, Any]:
-    return {
+def _serialize_outcome(stored: Any, memory_promotion: dict[str, Any] | None = None) -> dict[str, Any]:
+    payload = {
         "id": stored.id,
         "file_path": stored.file_path,
         "accepted": stored.accepted,
@@ -87,6 +87,9 @@ def _serialize_outcome(stored: Any) -> dict[str, Any]:
         "created_at": stored.created_at.isoformat(),
         "finding": stored.finding.model_dump(mode="json"),
     }
+    if memory_promotion is not None:
+        payload["memory_promotion"] = memory_promotion
+    return payload
 
 
 @app.get("/health")
@@ -171,7 +174,7 @@ def list_outcomes(
 @app.post("/outcomes")
 def create_outcome(body: OutcomeSubmit) -> dict[str, Any]:
     try:
-        outcome = record_finding_decision(
+        decision = record_finding_decision(
             body.review_id,
             body.index,
             accepted=body.accepted,
@@ -181,7 +184,10 @@ def create_outcome(body: OutcomeSubmit) -> dict[str, Any]:
         )
     except ValueError as exc:
         raise HTTPException(status_code=400, detail=str(exc)) from exc
-    return _serialize_outcome(outcome)
+    return _serialize_outcome(
+        decision.outcome,
+        memory_promotion=decision.memory_promotion,
+    )
 
 
 def main() -> None:

@@ -16,7 +16,7 @@ Detection-quality journey, final numbers, and known limits: [`benchmark/REPORT.m
 | **Supervisor** | Security → Architecture → combined summary |
 | **Security** | Semgrep **and** LLM logic/authorization (additive) → schema → confidence gate |
 | **Architecture** | Layering / dependency (and soft naming) with cross-file context + post-filters |
-| **Memory** | Chroma: seed-lesson *retrieval*; SQLite: verified outcomes (write path only — not re-injected into the next review yet) |
+| **Memory** | Chroma: seed lessons **plus** human-confirmed accepted lessons (retrieval); SQLite: every accept/reject verified outcome (audit trail). Rejects stay SQLite-only. |
 | **API** | FastAPI async jobs: submit → poll → results |
 | **Dashboard** | Vite + React: Submit, Findings, History, Memory |
 | **MCP** | Stdio `review_code` for Cursor / Claude Code / other clients |
@@ -44,7 +44,7 @@ Triggers: CLI · API · MCP · Dashboard
    + Chroma lessons (retrieval)
 ```
 
-**30-second talk track:** one Supervisor, two workers, same schema + gate; Chroma retrieves seed lessons; SQLite stores your decisions (closed-loop retrieval is stretch). Hard post-filters after the LLM (category bleed, target attribution, insufficient structure, package/import-edge rules) are why Architecture precision moved — see the report.
+**30-second talk track:** one Supervisor, two workers, same schema + gate; Chroma retrieves seed lessons and human-accepted promotions; SQLite stores every decision (rejects never enter Chroma). Hard post-filters after the LLM (category bleed, target attribution, insufficient structure, package/import-edge rules) are why Architecture precision moved — see the report.
 
 ---
 
@@ -182,6 +182,8 @@ secondpass/
 ├── .env.example
 ├── README.md
 ├── ARCHITECTURE.md
+├── DEMO.md                   # Week 8 panel walkthrough (run-of-show)
+├── DEMO_STUDY.md             # deep understanding / Q&A prep
 └── prompts.md                # build / learning log
 ```
 

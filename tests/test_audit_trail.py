@@ -124,6 +124,7 @@ def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "audit.db"
     monkeypatch.setattr("app.api.DEFAULT_DB_PATH", path)
     monkeypatch.setattr("app.persistence.DEFAULT_DB_PATH", path)
+    monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", tmp_path / "chromadb")
     return path
 
 

@@ -159,6 +159,7 @@ def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db_path = tmp_path / "integration.db"
     monkeypatch.setattr("app.api.DEFAULT_DB_PATH", db_path)
     monkeypatch.setattr("app.persistence.DEFAULT_DB_PATH", db_path)
+    monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", tmp_path / "chromadb")
 
     store = JobStore(max_workers=2)
     monkeypatch.setattr("app.api.job_store", store)
