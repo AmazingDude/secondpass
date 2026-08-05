@@ -20,8 +20,10 @@ from app.schema import Finding, ReviewResult
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db_path = tmp_path / "api.db"
+    chroma = tmp_path / "chromadb"
     monkeypatch.setattr("app.api.DEFAULT_DB_PATH", db_path)
     monkeypatch.setattr("app.persistence.DEFAULT_DB_PATH", db_path)
+    monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", chroma)
 
     store = JobStore(max_workers=2)
     monkeypatch.setattr("app.api.job_store", store)
@@ -195,7 +197,9 @@ def test_accept_reject_outcome_via_api(
         },
     )
     assert created.status_code == 200
-    assert created.json()["accepted"] is True
+    body = created.json()
+    assert body["accepted"] is True
+    assert body.get("memory_promotion", {}).get("status") in {"saved", "skipped"}
 
     listed = client.get(
         "/outcomes",

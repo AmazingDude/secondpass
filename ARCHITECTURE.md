@@ -120,10 +120,10 @@ Target path
 
 | Store | What | Who writes |
 | --- | --- | --- |
-| **Chroma** | Semantic seed lessons (`security_lessons.json`) — retrieved during Security review | Seeded at setup; Supervisor **does not** auto-`save_finding` |
+| **Chroma** | Semantic seed lessons (`security_lessons.json`) **plus** human-confirmed accepted lessons — retrieved during Security review | Seeded at setup; **human ACCEPT** via CLI/dashboard (Supervisor **does not** auto-`save_finding`) |
 | **SQLite verified outcomes** | Accept / reject + reason on a concrete finding | You, via CLI or dashboard |
 
-Supervisor does **not** auto-promote findings into Chroma. Verified outcomes are the honest write path Awais required; they are **not** re-injected into `search_memory` yet (stretch: automatic memory updates). Noise in retrieval memory is worse than an empty slot.
+Supervisor does **not** auto-promote findings into Chroma. A human ACCEPT writes SQLite first, then may promote a concise lesson into Chroma for future `search_memory` retrieval. Rejects remain SQLite-only. Gate “accepted” (confidence ≥ threshold) is not the same as human accepted.
 
 ---
 
@@ -148,7 +148,7 @@ No separate “dashboard backend.” CORS only; same Supervisor, same DB.
 2. **Supervisor** — one orchestration point; Security then Architecture; one aggregated report.
 3. **Same schema + gate on both workers** — comparable outputs, not two ad-hoc formats.
 4. **Hard filters after the LLM** — where precision actually moved (bleed, attribution, invented structure).
-5. **Two memory stores** — Chroma retrieves seed lessons; SQLite records human decisions (closed-loop retrieval = stretch).
+5. **Two memory stores** — Chroma retrieves seed + human-accepted lessons; SQLite records every human decision (rejects never enter Chroma).
 6. **Measured** — point to `benchmark/REPORT.md` (Security 1.0/1.0; Architecture Groq 1.0/1.0; OpenAI label split called out honestly).
 
 Skip stretches (webhook, Bandit, auto-memory) unless asked.

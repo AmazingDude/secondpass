@@ -641,7 +641,7 @@ def decide(
         help="Optional linked fix commit hash.",
     ),
 ) -> None:
-    """Record a human accept/reject decision into verified-outcome SQLite memory."""
+    """Record a human accept/reject into SQLite; ACCEPT may also promote a Chroma lesson."""
     if accept == reject:
         console.print(
             "[bold red]Error:[/bold red] Pass exactly one of --accept or --reject.",
@@ -652,7 +652,7 @@ def decide(
     from app.verified import record_finding_decision
 
     try:
-        outcome = record_finding_decision(
+        decision = record_finding_decision(
             review_id,
             index,
             accepted=accept,
@@ -663,16 +663,42 @@ def decide(
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
 
-    decision = "accepted" if outcome.accepted else "rejected"
+    outcome = decision.outcome
+    label = "accepted" if outcome.accepted else "rejected"
+    body = Text()
+    body.append(f"Outcome #{outcome.id}: {label}\n")
+    body.append(f"File: {outcome.file_path}\n")
+    body.append(f"Review id: {outcome.review_id}\n")
+    body.append(f"Type: {outcome.finding.finding_type}\n")
+    body.append(f"Reason: {outcome.reason}")
+
+    memory = decision.memory_promotion
+    if memory is not None:
+        status = str(memory.get("status") or "")
+        body.append("\n\nChroma lesson: ")
+        if status == "saved":
+            body.append(f"saved (id={memory.get('lesson_id')})", style="green")
+        elif status == "skipped":
+            matched = memory.get("matched_id") or memory.get("lesson_id") or "?"
+            reason_text = memory.get("reason") or "near-duplicate / already present"
+            body.append(
+                f"skipped as duplicate (matched={matched}; {reason_text})",
+                style="yellow",
+            )
+        elif status == "error":
+            body.append(
+                f"could not be saved — verified outcome kept in SQLite "
+                f"({memory.get('error') or memory.get('reason') or 'unknown error'})",
+                style="red",
+            )
+        else:
+            body.append(str(memory), style="yellow")
+    elif reject:
+        body.append("\n\nChroma lesson: not written (rejects stay SQLite-only)", style="dim")
+
     console.print(
         Panel(
-            Text(
-                f"Outcome #{outcome.id}: {decision}\n"
-                f"File: {outcome.file_path}\n"
-                f"Review id: {outcome.review_id}\n"
-                f"Type: {outcome.finding.finding_type}\n"
-                f"Reason: {outcome.reason}"
-            ),
+            body,
             title="Verified outcome saved",
             border_style="green" if outcome.accepted else "yellow",
             padding=(1, 2),

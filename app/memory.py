@@ -151,10 +151,17 @@ def save_finding(
                 }
 
     lesson_id = str(finding.get("id") or f"finding-{uuid.uuid4()}")
-    # Avoid colliding with an existing id by appending a suffix when needed.
+    # Exact-id retries (e.g. re-running human-accept for the same review index)
+    # must not create a second lesson. Near-duplicate distance check above still
+    # covers similar-but-not-identical content under a new id.
     existing = set(collection.get(include=[]).get("ids") or [])
     if lesson_id in existing:
-        lesson_id = f"{lesson_id}-{uuid.uuid4().hex[:8]}"
+        return {
+            "status": "skipped",
+            "reason": "lesson id already exists; not saved again",
+            "matched_id": lesson_id,
+            "distance": 0.0,
+        }
 
     collection.add(
         ids=[lesson_id],

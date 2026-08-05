@@ -151,9 +151,10 @@ def supervise_finding(
 ) -> dict[str, Any]:
     """Run supervisor → workers → synthesis for one finding.
 
-    Does not auto-write Chroma lessons via save_finding. Seeded lessons in
-    security_lessons.json remain available for MemoryWorker retrieval; new
-    durable outcomes go through human accept/reject → SQLite verified_outcomes.
+    Does not auto-write Chroma lessons via save_finding. Seeded lessons and
+    human-accepted promotions remain available for MemoryWorker retrieval;
+    durable decisions always go through human accept/reject → SQLite first
+    (ACCEPT may then promote a concise lesson into Chroma).
     """
     from app.audit import STAGE_CHROMA_SAVE_SKIP, audit_worker_scope, log_audit_stage
 
