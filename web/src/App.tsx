@@ -1,5 +1,5 @@
 import { useCallback, useState } from "react";
-import { getReview } from "./api";
+import { API_BASE, getReview } from "./api";
 import type { JobPayload, ReviewPayload } from "./api";
 import { FindingsView } from "./views/FindingsView";
 import { HistoryView } from "./views/HistoryView";
@@ -22,6 +22,14 @@ const NAV: { id: Tab; label: string }[] = [
   { id: "history", label: "History" },
   { id: "memory", label: "Memory" },
 ];
+
+function apiHostLabel(base: string) {
+  try {
+    return new URL(base).host;
+  } catch {
+    return base.replace(/^https?:\/\//, "");
+  }
+}
 
 export default function App() {
   const [screen, setScreen] = useState<Screen>({ name: "submit" });
@@ -74,7 +82,6 @@ export default function App() {
       });
       return;
     }
-    // Findings: never park Findings messaging on the History screen.
     if (lastFindings) {
       setScreen({ name: "findings", ...lastFindings });
     } else {
@@ -92,56 +99,70 @@ export default function App() {
           : "submit";
 
   return (
-    <div className="app-shell">
-      <nav className="app-nav" aria-label="Main">
-        {NAV.map((item) => (
-          <button
-            key={item.id}
-            type="button"
-            className={[
-              "app-nav-btn",
-              activeTab === item.id ? "active" : "",
-            ].join(" ")}
-            onClick={() => goTab(item.id)}
-          >
-            {item.label}
-          </button>
-        ))}
-      </nav>
+    <div className="app-frame">
+      <header className="app-topbar">
+        <div className="app-topbar-inner">
+          <div className="app-brand">
+            <span className="app-brand-name">secondpass</span>
+          </div>
 
-      {loadError &&
-      (screen.name === "submit" || screen.name === "findings") ? (
-        <p className="error-text">{loadError}</p>
-      ) : null}
+          <nav className="app-nav" aria-label="Main">
+            {NAV.map((item) => (
+              <button
+                key={item.id}
+                type="button"
+                className={[
+                  "app-nav-btn",
+                  activeTab === item.id ? "active" : "",
+                ].join(" ")}
+                onClick={() => goTab(item.id)}
+              >
+                {item.label}
+              </button>
+            ))}
+          </nav>
 
-      <div className="view-panel" key={screen.name}>
-        {screen.name === "submit" ? (
-          <SubmitReview
-            initialPath={DEMO_PATH}
-            onCompleted={handleCompleted}
-          />
+          <div className="app-topbar-status mono">
+            api {apiHostLabel(API_BASE)} · connected
+          </div>
+        </div>
+      </header>
+
+      <div className="app-shell">
+        {loadError &&
+        (screen.name === "submit" || screen.name === "findings") ? (
+          <p className="error-text">{loadError}</p>
         ) : null}
 
-        {screen.name === "findings" ? (
-          <FindingsView
-            reviews={screen.reviews}
-            jobPath={screen.jobPath}
-            onBack={() => goTab("history")}
-            backLabel="History"
-          />
-        ) : null}
+        <div className="view-panel" key={screen.name}>
+          {screen.name === "submit" ? (
+            <SubmitReview
+              initialPath={DEMO_PATH}
+              onCompleted={handleCompleted}
+            />
+          ) : null}
 
-        {screen.name === "history" ? (
-          <HistoryView
-            onOpenReview={(review) => {
-              openFindings([review], review.file_path);
-            }}
-          />
-        ) : null}
+          {screen.name === "findings" ? (
+            <FindingsView
+              reviews={screen.reviews}
+              jobPath={screen.jobPath}
+              onBack={() => goTab("history")}
+              backLabel="History"
+            />
+          ) : null}
 
-        {screen.name === "memory" ? (
-          <MemoryView initialReviewId={screen.initialReviewId} />
-        ) : null}
+          {screen.name === "history" ? (
+            <HistoryView
+              onOpenReview={(review) => {
+                openFindings([review], review.file_path);
+              }}
+            />
+          ) : null}
+
+          {screen.name === "memory" ? (
+            <MemoryView initialReviewId={screen.initialReviewId} />
+          ) : null}
+        </div>
       </div>
     </div>
   );

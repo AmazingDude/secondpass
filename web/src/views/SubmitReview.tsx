@@ -11,6 +11,12 @@ import { derivePipelineFromAudit } from "../pipelineTimeline";
 
 const POLL_MS = 600;
 
+const JOB_STAGES = [
+  { id: "queued", label: "Job accepted" },
+  { id: "running", label: "Security + Architecture review running" },
+  { id: "completed", label: "Persisting results" },
+] as const;
+
 type Props = {
   onCompleted: (job: JobPayload) => void;
   initialPath?: string;
@@ -74,8 +80,8 @@ function formatStageDetail(event: AuditEvent) {
   }
 }
 
-function formatToolArgsTail(argsRaw: unknown): string {
-  if (typeof argsRaw !== "string" || !argsRaw) return "args=";
+function formatToolArgsTail(argsRaw: unknown): string | null {
+  if (typeof argsRaw !== "string" || !argsRaw) return null;
   try {
     const parsed = JSON.parse(argsRaw) as {
       args?: unknown[];
@@ -92,18 +98,29 @@ function formatToolArgsTail(argsRaw: unknown): string {
   } catch {
     /* fall through */
   }
-  return `args=${argsRaw}`;
+  const clipped =
+    argsRaw.length > 140 ? `${argsRaw.slice(0, 137)}...` : argsRaw;
+  return `args=${clipped}`;
 }
 
-function formatCliLine(event: AuditEvent): string {
-  const time = formatTime(event.timestamp);
+function AuditLogRow({ event }: { event: AuditEvent }) {
   const kind = eventKind(event);
   const detail = event.detail || {};
+  const time = formatTime(event.timestamp);
 
   if (kind === "agent_event") {
     const agent = String(detail.agent || event.worker_name || "system");
     const message = String(detail.message || "");
-    return `[agent] ${time} | agent=${agent} | ${message}`;
+    return (
+      <div className="audit-log-row audit-log-row--agent">
+        <div className="audit-log-row-main">
+          <span className="audit-tok-kind">[agent]</span>
+          <span className="audit-tok-time">{time}</span>
+          <span className="audit-tok-meta">agent={agent}</span>
+          <span className="audit-tok-msg">{message}</span>
+        </div>
+      </div>
+    );
   }
 
   if (kind === "tool") {
@@ -117,22 +134,44 @@ function formatCliLine(event: AuditEvent): string {
           : "ok";
     const duration =
       typeof detail.duration_ms === "number"
-        ? `duration_ms=${Math.round(detail.duration_ms)}`
+        ? Math.round(detail.duration_ms)
         : null;
-    const parts = [
-      `[tool] ${time}`,
-      `agent=${agent}`,
-      `tool=${tool}`,
-      status,
-      ...(duration ? [duration] : []),
-      formatToolArgsTail(detail.args),
-    ];
-    return parts.join(" | ");
+    const argsTail = formatToolArgsTail(detail.args);
+    return (
+      <div className="audit-log-row audit-log-row--tool">
+        <div className="audit-log-row-main">
+          <span className="audit-tok-kind">[tool]</span>
+          <span className="audit-tok-time">{time}</span>
+          <span className="audit-tok-meta">agent={agent}</span>
+          <span className="audit-tok-fn">tool={tool}</span>
+          <span className="audit-tok-msg">{status}</span>
+          {duration != null ? (
+            <span className="audit-tok-meta">duration_ms={duration}</span>
+          ) : null}
+        </div>
+        {argsTail ? (
+          <div className="audit-log-row-detail">↳ {argsTail}</div>
+        ) : null}
+      </div>
+    );
   }
 
   const worker = event.worker_name || "system";
   const label = STAGE_LABELS[event.stage] || event.stage;
-  return `[stage] ${time} | worker=${worker} | ${label} | ${formatStageDetail(event)}`;
+  const stageDetail = formatStageDetail(event);
+  return (
+    <div className="audit-log-row audit-log-row--stage">
+      <div className="audit-log-row-main">
+        <span className="audit-tok-kind">[stage]</span>
+        <span className="audit-tok-time">{time}</span>
+        <span className="audit-tok-meta">worker={worker}</span>
+        <span className="audit-tok-msg">{label}</span>
+      </div>
+      {stageDetail ? (
+        <div className="audit-log-row-detail">↳ {stageDetail}</div>
+      ) : null}
+    </div>
+  );
 }
 
 export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
@@ -231,6 +270,10 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
   const status = job?.status;
   const polling = Boolean(jobId) && status !== "failed" && status !== "completed";
   const running = submitting || polling || status === "queued" || status === "running";
+  const hasPersistedAudit = auditEvents.some(
+    (event) =>
+      event.stage === "review_persisted" || event.stage === "review_complete",
+  );
 
   const pipeline = useMemo(
     () => derivePipelineFromAudit(auditEvents, status),
@@ -250,20 +293,34 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
               ? "submitting"
               : "idle";
 
+  function jobStageState(
+    stageId: (typeof JOB_STAGES)[number]["id"],
+  ): "idle" | "active" | "done" | "warn" {
+    if (status === "failed") {
+      if (stageId === "queued") return "done";
+      if (stageId === "running") return "warn";
+      return "idle";
+    }
+    if (status === "completed") return "done";
+    if (!status || status === "queued" || submitting) {
+      return stageId === "queued" ? "active" : "idle";
+    }
+    if (status === "running") {
+      if (stageId === "queued") return "done";
+      if (stageId === "running") return hasPersistedAudit ? "done" : "active";
+      return hasPersistedAudit ? "active" : "idle";
+    }
+    return "idle";
+  }
+
   return (
     <div className="submit-layout">
-      <p className="app-eyebrow">Submit</p>
-      <h1 className="app-title">Run a review</h1>
+      <header className="submit-page-heading">
+        <p className="app-eyebrow">Submit</p>
+        <h1 className="app-title">Run a review</h1>
+      </header>
 
       <form className="card submit-form-card" onSubmit={handleSubmit}>
-        <div className="submit-form-header">
-          <span className="submit-form-heading">Path</span>
-          <div className="submit-pill-row" aria-label="Pipeline reminders">
-            <span className="submit-pill submit-pill--primary">gate ≥80</span>
-            <span className="submit-pill">semgrep + logic</span>
-            <span className="submit-pill submit-pill--ai">human-gated memory</span>
-          </div>
-        </div>
         <label className="field-label" htmlFor="path">
           File or directory path
         </label>
@@ -328,6 +385,32 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
               </div>
             ) : null}
 
+            <div className="job-stage-inset">
+              <p className="section-label">Job status</p>
+              <ol className="job-stage-checklist">
+                {JOB_STAGES.map((stage) => {
+                  const state = jobStageState(stage.id);
+                  return (
+                    <li
+                      key={stage.id}
+                      className={`job-stage-check job-stage-check--${state}`}
+                    >
+                      <span className="job-stage-mark" aria-hidden="true">
+                        {state === "done"
+                          ? "✓"
+                          : state === "warn"
+                            ? "!"
+                            : state === "active"
+                              ? "›"
+                              : "·"}
+                      </span>
+                      <span>{stage.label}</span>
+                    </li>
+                  );
+                })}
+              </ol>
+            </div>
+
             <AgentTimeline
               states={pipeline.states}
               info={pipeline.info}
@@ -351,16 +434,11 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
               {auditEvents.length === 0 ? (
                 <p className="audit-log-waiting">
                   <span className="spinner" aria-hidden="true" />
-                  waiting for events…
+                  waiting for a job · events stream here
                 </p>
               ) : (
                 auditEvents.map((event) => (
-                  <p
-                    className={`audit-log-line audit-log-line--${eventKind(event)}`}
-                    key={event.id}
-                  >
-                    {formatCliLine(event)}
-                  </p>
+                  <AuditLogRow key={event.id} event={event} />
                 ))
               )}
             </div>

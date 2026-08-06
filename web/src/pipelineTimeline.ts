@@ -81,7 +81,7 @@ export const TIMELINE_ROWS: TimelineRow[] = [
   },
   {
     id: "gate",
-    label: "Confidence gate ≥80",
+    label: "Decision gate",
     sub: "accept, flag for review, persist",
     agent: "supervisor",
   },
