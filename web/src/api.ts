@@ -55,6 +55,20 @@ export type JobPayload = {
   result?: Record<string, unknown>;
 };
 
+export type AuditEvent = {
+  id: number;
+  stage: string;
+  worker_name: string | null;
+  timestamp: string;
+  detail: Record<string, unknown>;
+};
+
+export type JobAuditPayload = {
+  job_id: string;
+  event_count: number;
+  events: AuditEvent[];
+};
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -85,6 +99,10 @@ export function submitReview(path: string) {
 
 export function getJob(jobId: string) {
   return request<JobPayload>(`/reviews/jobs/${jobId}`);
+}
+
+export function getJobAudit(jobId: string) {
+  return request<JobAuditPayload>(`/reviews/jobs/${jobId}/audit`);
 }
 
 export function getReview(reviewId: number) {

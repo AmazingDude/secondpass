@@ -436,18 +436,25 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
             style="dim",
         )
     if persisted:
-        header.append("\nPersisted review ids: ", style="dim")
-        parts = [
-            f"{worker}={rid}"
-            for worker, rid in persisted.items()
-            if rid is not None
-        ]
-        header.append(", ".join(parts) or "(none)", style="dim")
-        header.append(
-            "\nDecide: secondpass decide --review-id <id> --index 0 "
-            "--accept|--reject --reason \"...\"",
-            style="dim",
-        )
+        security_id = persisted.get("security")
+        architecture_id = persisted.get("architecture")
+        if security_id is not None:
+            header.append(
+                f"\nSecurity review id: {security_id}",
+                style="cyan",
+            )
+        if architecture_id is not None:
+            header.append(
+                f"\nArchitecture review id: {architecture_id}",
+                style="dim",
+            )
+        decide_id = security_id if security_id is not None else architecture_id
+        if decide_id is not None:
+            header.append(
+                f"\nDecide: python -m app.cli decide --review-id {decide_id} "
+                "--index 0 --accept|--reject --reason \"...\"",
+                style="dim",
+            )
     console.print()
     console.print(Panel.fit(header, border_style="white"))
 
