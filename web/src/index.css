@@ -444,6 +444,377 @@ a {
   }
 }
 
+.submit-layout {
+  display: flex;
+  flex-direction: column;
+  gap: 1rem;
+}
+
+.submit-form-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.submit-form-header {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.5rem;
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--surface-border);
+  background: color-mix(in srgb, var(--surface-muted) 65%, var(--surface));
+}
+
+.submit-form-heading {
+  font-size: 0.8125rem;
+  font-weight: 650;
+}
+
+.submit-pill-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.35rem;
+}
+
+.submit-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.15rem 0.45rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 999px;
+  background: var(--surface);
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+  font-weight: 600;
+  letter-spacing: 0.01em;
+}
+
+.submit-pill--primary {
+  border-color: color-mix(in srgb, var(--accent-blue) 35%, var(--surface-border));
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--surface));
+}
+
+.submit-pill--ai {
+  border-color: color-mix(in srgb, var(--accent-lavender) 40%, var(--surface-border));
+  color: var(--accent-lavender);
+  background: color-mix(in srgb, var(--accent-lavender) 10%, var(--surface));
+}
+
+.submit-form-card .field-label,
+.submit-form-card .submit-path-row,
+.submit-form-card .submit-hint,
+.submit-form-card .error-text {
+  margin-left: 1rem;
+  margin-right: 1rem;
+}
+
+.submit-form-card .field-label {
+  margin-top: 0.85rem;
+}
+
+.submit-path-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 0.5rem;
+  margin-top: 0.35rem;
+}
+
+.submit-path-row .field-input {
+  flex: 1 1 14rem;
+  min-width: 0;
+}
+
+.submit-hint {
+  margin: 0.55rem 1rem 1rem;
+  color: var(--text-secondary);
+  font-size: 0.72rem;
+  line-height: 1.45;
+}
+
+.submit-run-grid {
+  display: grid;
+  gap: 1rem;
+  animation: job-panel-reveal 180ms var(--ease-out);
+}
+
+@media (min-width: 1100px) {
+  .submit-run-grid {
+    grid-template-columns: minmax(0, 1.45fr) minmax(0, 1fr);
+    align-items: start;
+  }
+}
+
+.submit-run-grid.is-failed .submit-progress-card {
+  border-color: color-mix(in srgb, #b91c1c 35%, var(--surface-border));
+}
+
+.submit-progress-card,
+.submit-log-card {
+  padding: 0;
+  overflow: hidden;
+}
+
+.submit-progress-card .job-status-heading,
+.submit-log-card .audit-log-heading {
+  padding: 0.65rem 1rem;
+  border-bottom: 1px solid var(--surface-border);
+  background: color-mix(in srgb, var(--surface-muted) 65%, var(--surface));
+}
+
+.submit-progress-card .job-failure-banner {
+  margin: 0.75rem 1rem 0;
+}
+
+.submit-progress-card .agent-timeline {
+  padding: 0.85rem 1rem 1rem;
+}
+
+.submit-status-meta {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 0.45rem;
+}
+
+.submit-status-pill {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid var(--surface-border);
+  font-size: 0.65rem;
+  font-weight: 650;
+  text-transform: lowercase;
+}
+
+.submit-status-pill--running,
+.submit-status-pill--queued,
+.submit-status-pill--submitting {
+  border-color: color-mix(in srgb, var(--accent-blue) 35%, var(--surface-border));
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--surface));
+}
+
+.submit-status-pill--completed {
+  border-color: color-mix(in srgb, var(--severity-low) 40%, var(--surface-border));
+  color: var(--severity-low);
+  background: color-mix(in srgb, var(--severity-low) 10%, var(--surface));
+}
+
+.submit-status-pill--failed {
+  border-color: color-mix(in srgb, #b91c1c 35%, var(--surface-border));
+  color: #b91c1c;
+  background: #fef2f2;
+}
+
+.submit-log-card .audit-log {
+  max-height: 28rem;
+  min-height: 12rem;
+  background: #0f1419;
+  border: 0;
+  border-radius: 0;
+}
+
+.submit-log-card .audit-log-line,
+.submit-log-card .audit-log-waiting {
+  border-bottom-color: color-mix(in srgb, #334155 55%, transparent);
+  color: #94a3b8;
+}
+
+.submit-log-card .audit-log-line--agent_event {
+  color: #7dd3fc;
+}
+
+.submit-log-card .audit-log-line--tool {
+  color: #e9d5ff;
+}
+
+.submit-log-card .audit-log-line--stage {
+  color: #64748b;
+}
+
+.agent-timeline-progress {
+  margin-bottom: 0.85rem;
+}
+
+.agent-timeline-progress-meta {
+  display: flex;
+  justify-content: space-between;
+  margin-bottom: 0.35rem;
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+}
+
+.agent-timeline-bar {
+  height: 0.35rem;
+  overflow: hidden;
+  border-radius: 999px;
+  background: var(--surface-border);
+}
+
+.agent-timeline-bar-fill {
+  height: 100%;
+  border-radius: inherit;
+  background: var(--accent-blue);
+  transition: width 500ms var(--ease-out);
+}
+
+.agent-timeline-list {
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.agent-timeline-item {
+  position: relative;
+  padding-left: 1.75rem;
+  margin-bottom: 0.35rem;
+}
+
+.agent-timeline-rail {
+  position: absolute;
+  left: 10px;
+  top: 1.55rem;
+  bottom: -0.35rem;
+  width: 1px;
+  background: var(--surface-border);
+}
+
+.agent-timeline-dot-slot {
+  position: absolute;
+  left: 0;
+  top: 0.55rem;
+}
+
+.agent-timeline-card {
+  border: 1px solid transparent;
+  border-radius: 8px;
+  padding: 0.45rem 0.65rem;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    background var(--motion-fast) var(--ease-out);
+}
+
+.agent-timeline-card--done {
+  border-color: var(--surface-border);
+  background: var(--surface);
+}
+
+.agent-timeline-card--warn {
+  border-color: color-mix(in srgb, var(--severity-medium) 45%, var(--surface-border));
+  background: color-mix(in srgb, var(--severity-medium) 10%, var(--surface));
+}
+
+.agent-timeline-card--idle {
+  border-color: transparent;
+}
+
+.agent-timeline-card-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.35rem 0.55rem;
+}
+
+.agent-timeline-title {
+  font-size: 0.78rem;
+  font-weight: 650;
+}
+
+.agent-timeline-card--idle .agent-timeline-title {
+  color: var(--text-secondary);
+}
+
+.agent-timeline-meta {
+  color: var(--text-secondary);
+  font-size: 0.65rem;
+}
+
+.agent-timeline-sub {
+  margin: 0.15rem 0 0;
+  color: var(--text-secondary);
+  font-size: 0.7rem;
+  line-height: 1.35;
+}
+
+.agent-timeline-children {
+  margin: 0.45rem 0 0;
+  padding: 0 0 0 0.65rem;
+  list-style: none;
+  border-left: 1px solid var(--surface-border);
+}
+
+.agent-timeline-child {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.45rem;
+  margin-bottom: 0.35rem;
+}
+
+.agent-timeline-child:last-child {
+  margin-bottom: 0;
+}
+
+.agent-timeline-child-body {
+  min-width: 0;
+}
+
+.agent-timeline-child-label {
+  font-size: 0.7rem;
+  color: var(--text-primary);
+}
+
+.agent-timeline-child-label.is-idle {
+  color: var(--text-secondary);
+}
+
+.agent-dot {
+  display: grid;
+  place-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
+  border-radius: 999px;
+  border: 1px solid var(--surface-border);
+  background: var(--surface);
+  color: #fff;
+}
+
+.agent-dot--sm {
+  width: 0.85rem;
+  height: 0.85rem;
+}
+
+.agent-dot--active {
+  border-style: solid;
+}
+
+.agent-dot--idle {
+  border-style: dashed;
+  color: var(--text-secondary);
+}
+
+.agent-dot--idle.is-skipped {
+  opacity: 0.65;
+}
+
+.agent-dot-icon {
+  width: 0.75rem;
+  height: 0.75rem;
+}
+
+.agent-dot-icon--sm {
+  width: 0.5rem;
+  height: 0.5rem;
+}
+
+.agent-dot--active .agent-dot-icon,
+.agent-dot--active .agent-dot-icon--sm {
+  animation: spin 0.7s linear infinite;
+}
+
 .job-status-panel {
   margin-top: 1rem;
   padding: 0.9rem;

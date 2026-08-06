@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
   getJob,
   getJobAudit,
@@ -6,14 +6,10 @@ import {
   type AuditEvent,
   type JobPayload,
 } from "../api";
+import { AgentTimeline } from "../components/AgentTimeline";
+import { derivePipelineFromAudit } from "../pipelineTimeline";
 
 const POLL_MS = 600;
-
-const STAGES = [
-  { id: "queued", label: "Job accepted" },
-  { id: "running", label: "Security + Architecture review running" },
-  { id: "completed", label: "Persisting results" },
-] as const;
 
 type Props = {
   onCompleted: (job: JobPayload) => void;
@@ -78,7 +74,6 @@ function formatStageDetail(event: AuditEvent) {
   }
 }
 
-/** Prefer query=/path= over raw args= JSON when present (CLI-like density). */
 function formatToolArgsTail(argsRaw: unknown): string {
   if (typeof argsRaw !== "string" || !argsRaw) return "args=";
   try {
@@ -100,7 +95,6 @@ function formatToolArgsTail(argsRaw: unknown): string {
   return `args=${argsRaw}`;
 }
 
-/** Dense one-liner matching CLI stderr spirit ([agent]/[tool]/[stage]). */
 function formatCliLine(event: AuditEvent): string {
   const time = formatTime(event.timestamp);
   const kind = eventKind(event);
@@ -169,8 +163,6 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
       ]);
       if (cancelled) return;
 
-      // The audit route returns 404 until the first SQLite audit event exists.
-      // That is normal at job start, so only append a successful response.
       if (auditResult.status === "fulfilled") {
         const newEvents = auditResult.value.events.filter(
           (event) => !seenAuditIds.current.has(event.id),
@@ -238,40 +230,53 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
 
   const status = job?.status;
   const polling = Boolean(jobId) && status !== "failed" && status !== "completed";
-  const hasPersistedAudit = auditEvents.some(
-    (event) =>
-      event.stage === "review_persisted" || event.stage === "review_complete",
+  const running = submitting || polling || status === "queued" || status === "running";
+
+  const pipeline = useMemo(
+    () => derivePipelineFromAudit(auditEvents, status),
+    [auditEvents, status],
   );
+
   const statusLabel =
     status === "failed"
-      ? "Review failed"
+      ? "failed"
       : status === "completed"
-        ? "Review complete"
+        ? "completed"
         : status === "running"
-          ? "Review running"
+          ? "running"
           : status === "queued"
-            ? "Job queued"
-            : "Submitting job";
+            ? "queued"
+            : submitting
+              ? "submitting"
+              : "idle";
 
   return (
-    <div>
+    <div className="submit-layout">
       <p className="app-eyebrow">Submit</p>
       <h1 className="app-title">Run a review</h1>
 
-      <form className="card" onSubmit={handleSubmit}>
+      <form className="card submit-form-card" onSubmit={handleSubmit}>
+        <div className="submit-form-header">
+          <span className="submit-form-heading">Path</span>
+          <div className="submit-pill-row" aria-label="Pipeline reminders">
+            <span className="submit-pill submit-pill--primary">gate ≥80</span>
+            <span className="submit-pill">semgrep + logic</span>
+            <span className="submit-pill submit-pill--ai">human-gated memory</span>
+          </div>
+        </div>
         <label className="field-label" htmlFor="path">
           File or directory path
         </label>
-        <input
-          id="path"
-          className="field-input mono"
-          value={path}
-          onChange={(e) => setPath(e.target.value)}
-          placeholder="benchmark/fixtures/notes_idor.py"
-          disabled={submitting || polling}
-          autoComplete="off"
-        />
-        <div style={{ marginTop: "1rem" }}>
+        <div className="submit-path-row">
+          <input
+            id="path"
+            className="field-input mono"
+            value={path}
+            onChange={(e) => setPath(e.target.value)}
+            placeholder="benchmark/fixtures/notes_idor.py"
+            disabled={submitting || polling}
+            autoComplete="off"
+          />
           <button
             type="submit"
             className="btn btn-primary"
@@ -287,20 +292,34 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
             )}
           </button>
         </div>
+        <p className="submit-hint">
+          Supervisor decides which workers and tools run. Memory and web only
+          light up when routing calls them.
+        </p>
         {error && !(jobId || job) ? <p className="error-text">{error}</p> : null}
-        {(jobId || job) && (
-          <section
-            className={`job-status-panel ${status === "failed" ? "failed" : ""}`}
-            aria-live="polite"
-          >
+      </form>
+
+      {(jobId || job) && (
+        <div
+          className={`submit-run-grid ${status === "failed" ? "is-failed" : ""}`}
+          aria-live="polite"
+        >
+          <section className="card submit-progress-card">
             <div className="job-status-heading">
               <div>
-                <p className="section-label">Job status</p>
+                <p className="section-label">Run progress</p>
                 <p className="job-status-label" key={statusLabel}>
-                  {statusLabel}
+                  {statusLabel === "idle" ? "idle" : statusLabel}
                 </p>
               </div>
-              <span className="job-status-id mono">job_id {jobId}</span>
+              <div className="submit-status-meta">
+                <span className="job-status-id mono">job_id {jobId}</span>
+                <span
+                  className={`submit-status-pill submit-status-pill--${statusLabel}`}
+                >
+                  {statusLabel}
+                </span>
+              </div>
             </div>
 
             {error ? (
@@ -309,73 +328,45 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
               </div>
             ) : null}
 
-            <ol className="stage-list">
-              {STAGES.map((stage, index) => {
-                let state: "pending" | "active" | "done" = "pending";
-                if (!status || status === "queued") {
-                  state = stage.id === "queued" ? "active" : "pending";
-                } else if (status === "running") {
-                  if (stage.id === "queued") state = "done";
-                  else if (stage.id === "running") {
-                    state = hasPersistedAudit ? "done" : "active";
-                  } else if (hasPersistedAudit) {
-                    state = "active";
-                  }
-                } else if (status === "completed") {
-                  state = "done";
-                } else if (status === "failed") {
-                  if (index === 0) state = "done";
-                  else if (stage.id === "running") state = "active";
-                }
-                return (
-                  <li key={stage.id} className={`stage-item ${state}`}>
-                    <span className="stage-num" aria-hidden="true">
-                      {state === "done" ? "✓" : state === "active" ? "…" : index + 1}
-                    </span>
-                    <div>
-                      <div className="stage-label">{stage.label}</div>
-                      {state === "active" ? (
-                        <div className="stage-meta">
-                          <span className="spinner" aria-hidden="true" />
-                          {stage.id === "running"
-                            ? "Events stream below as work completes…"
-                            : "Waiting for review worker…"}
-                        </div>
-                      ) : null}
-                    </div>
-                  </li>
-                );
-              })}
-            </ol>
+            <AgentTimeline
+              states={pipeline.states}
+              info={pipeline.info}
+              running={running && status !== "completed" && status !== "failed"}
+              doneCount={pipeline.doneCount}
+              totalCount={pipeline.totalCount}
+              percent={pipeline.percent}
+            />
+          </section>
 
-            <div className="audit-log-shell">
-              <div className="audit-log-heading">
-                <span className="section-label">Live log</span>
-                <span className="audit-log-count">
-                  {auditEvents.length ? `${auditEvents.length} events` : "connecting"}
-                </span>
-              </div>
-              <div className="audit-log mono" ref={auditLogRef}>
-                {auditEvents.length === 0 ? (
-                  <p className="audit-log-waiting">
-                    <span className="spinner" aria-hidden="true" />
-                    waiting for events…
+          <section className="card submit-log-card">
+            <div className="audit-log-heading">
+              <span className="section-label">Live events</span>
+              <span className="audit-log-count">
+                {auditEvents.length
+                  ? `${auditEvents.length} lines`
+                  : "connecting"}
+              </span>
+            </div>
+            <div className="audit-log mono" ref={auditLogRef}>
+              {auditEvents.length === 0 ? (
+                <p className="audit-log-waiting">
+                  <span className="spinner" aria-hidden="true" />
+                  waiting for events…
+                </p>
+              ) : (
+                auditEvents.map((event) => (
+                  <p
+                    className={`audit-log-line audit-log-line--${eventKind(event)}`}
+                    key={event.id}
+                  >
+                    {formatCliLine(event)}
                   </p>
-                ) : (
-                  auditEvents.map((event) => (
-                    <p
-                      className={`audit-log-line audit-log-line--${eventKind(event)}`}
-                      key={event.id}
-                    >
-                      {formatCliLine(event)}
-                    </p>
-                  ))
-                )}
-              </div>
+                ))
+              )}
             </div>
           </section>
-        )}
-      </form>
+        </div>
+      )}
     </div>
   );
 }
