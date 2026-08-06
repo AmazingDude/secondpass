@@ -122,6 +122,8 @@ def get_job_audit(job_id: str) -> dict[str, Any]:
     Reads SQLite — works after process restart even when the in-memory job
     is gone. 404 only when no events exist for this job_id.
     """
+    from app.audit import event_kind
+
     events = list_audit_events(job_id, db_path=DEFAULT_DB_PATH)
     if not events:
         raise HTTPException(
@@ -134,6 +136,7 @@ def get_job_audit(job_id: str) -> dict[str, Any]:
         "events": [
             {
                 "id": event.id,
+                "kind": event_kind(event.stage),
                 "stage": event.stage,
                 "worker_name": event.worker_name,
                 "timestamp": event.timestamp.isoformat(),

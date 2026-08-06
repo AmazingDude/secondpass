@@ -55,8 +55,12 @@ export type JobPayload = {
   result?: Record<string, unknown>;
 };
 
+export type AuditEventKind = "stage" | "agent_event" | "tool";
+
 export type AuditEvent = {
   id: number;
+  /** stage | agent_event | tool — present on newer API responses */
+  kind?: AuditEventKind;
   stage: string;
   worker_name: string | null;
   timestamp: string;

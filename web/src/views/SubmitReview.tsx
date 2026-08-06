@@ -37,10 +37,20 @@ function formatTime(timestamp: string) {
     hour: "2-digit",
     minute: "2-digit",
     second: "2-digit",
+    hour12: false,
   });
 }
 
-function formatAuditDetail(event: AuditEvent) {
+function eventKind(event: AuditEvent): "stage" | "agent_event" | "tool" {
+  if (event.kind === "stage" || event.kind === "agent_event" || event.kind === "tool") {
+    return event.kind;
+  }
+  if (event.stage === "agent_event") return "agent_event";
+  if (event.stage === "tool_call") return "tool";
+  return "stage";
+}
+
+function formatStageDetail(event: AuditEvent) {
   const detail = event.detail || {};
   const count = (key: string) =>
     typeof detail[key] === "number" ? String(detail[key]) : null;
@@ -66,6 +76,69 @@ function formatAuditDetail(event: AuditEvent) {
     default:
       return STAGE_LABELS[event.stage] || event.stage.replaceAll("_", " ");
   }
+}
+
+/** Prefer query=/path= over raw args= JSON when present (CLI-like density). */
+function formatToolArgsTail(argsRaw: unknown): string {
+  if (typeof argsRaw !== "string" || !argsRaw) return "args=";
+  try {
+    const parsed = JSON.parse(argsRaw) as {
+      args?: unknown[];
+      kwargs?: Record<string, unknown>;
+    };
+    const kwargs = parsed.kwargs || {};
+    for (const key of ["query", "path", "file_path", "paths"]) {
+      if (kwargs[key] != null) {
+        const value = String(kwargs[key]);
+        const clipped = value.length > 120 ? `${value.slice(0, 117)}...` : value;
+        return `${key}=${clipped}`;
+      }
+    }
+  } catch {
+    /* fall through */
+  }
+  return `args=${argsRaw}`;
+}
+
+/** Dense one-liner matching CLI stderr spirit ([agent]/[tool]/[stage]). */
+function formatCliLine(event: AuditEvent): string {
+  const time = formatTime(event.timestamp);
+  const kind = eventKind(event);
+  const detail = event.detail || {};
+
+  if (kind === "agent_event") {
+    const agent = String(detail.agent || event.worker_name || "system");
+    const message = String(detail.message || "");
+    return `[agent] ${time} | agent=${agent} | ${message}`;
+  }
+
+  if (kind === "tool") {
+    const agent = String(detail.agent || event.worker_name || "system");
+    const tool = String(detail.tool || "unknown");
+    const status =
+      typeof detail.status === "string"
+        ? detail.status
+        : detail.ok === false
+          ? "error"
+          : "ok";
+    const duration =
+      typeof detail.duration_ms === "number"
+        ? `duration_ms=${Math.round(detail.duration_ms)}`
+        : null;
+    const parts = [
+      `[tool] ${time}`,
+      `agent=${agent}`,
+      `tool=${tool}`,
+      status,
+      ...(duration ? [duration] : []),
+      formatToolArgsTail(detail.args),
+    ];
+    return parts.join(" | ");
+  }
+
+  const worker = event.worker_name || "system";
+  const label = STAGE_LABELS[event.stage] || event.stage;
+  return `[stage] ${time} | worker=${worker} | ${label} | ${formatStageDetail(event)}`;
 }
 
 export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
@@ -277,7 +350,7 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
 
             <div className="audit-log-shell">
               <div className="audit-log-heading">
-                <span className="section-label">Live audit</span>
+                <span className="section-label">Live log</span>
                 <span className="audit-log-count">
                   {auditEvents.length ? `${auditEvents.length} events` : "connecting"}
                 </span>
@@ -290,11 +363,11 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
                   </p>
                 ) : (
                   auditEvents.map((event) => (
-                    <p className="audit-log-line" key={event.id}>
-                      <time>{formatTime(event.timestamp)}</time>
-                      <span>{event.worker_name || "system"}</span>
-                      <strong>{STAGE_LABELS[event.stage] || event.stage}</strong>
-                      <span>{formatAuditDetail(event)}</span>
+                    <p
+                      className={`audit-log-line audit-log-line--${eventKind(event)}`}
+                      key={event.id}
+                    >
+                      {formatCliLine(event)}
                     </p>
                   ))
                 )}

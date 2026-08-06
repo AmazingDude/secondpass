@@ -95,10 +95,37 @@ def _print_tool_stderr(
     _stderr_console.print(line)
 
 
+def _persist_hook_event(
+    stage: str,
+    *,
+    worker_name: str,
+    detail: dict[str, Any],
+) -> None:
+    """When a review job_id is in audit_scope, mirror this hook into SQLite.
+
+    Failures never break the live review — stderr / file logging already ran.
+    """
+    try:
+        from app.audit import get_current_job_id, log_audit_stage
+
+        job_id = get_current_job_id()
+        if not job_id:
+            return
+        log_audit_stage(
+            stage,
+            worker_name=worker_name,
+            detail=detail,
+            job_id=job_id,
+        )
+    except Exception:  # noqa: BLE001 — hooks must not fail the review
+        pass
+
+
 def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_PATH) -> None:
     """Log a multi-agent hand-off or decision (not a tool call)."""
     now = datetime.now(timezone.utc)
     timestamp = now.isoformat()
+    agent_name = get_current_agent()
     line = f"{timestamp} | agent_event | {message}"
     _print_agent_stderr(now, message)
     if log_file is not None:
@@ -106,6 +133,17 @@ def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_
         path.parent.mkdir(parents=True, exist_ok=True)
         with path.open("a", encoding="utf-8") as handle:
             handle.write(line + "\n")
+    from app.audit import STAGE_AGENT_EVENT
+
+    _persist_hook_event(
+        STAGE_AGENT_EVENT,
+        worker_name=agent_name,
+        detail={
+            "kind": "agent_event",
+            "agent": agent_name,
+            "message": _truncate(str(message), limit=500),
+        },
+    )
 
 
 def _truncate(value: str, limit: int = _MAX_ARG_CHARS) -> str:
@@ -170,6 +208,21 @@ def log_tool_call(
                     path.parent.mkdir(parents=True, exist_ok=True)
                     with path.open("a", encoding="utf-8") as handle:
                         handle.write(line + "\n")
+                from app.audit import STAGE_TOOL_CALL
+
+                _persist_hook_event(
+                    STAGE_TOOL_CALL,
+                    worker_name=agent_name,
+                    detail={
+                        "kind": "tool",
+                        "agent": agent_name,
+                        "tool": tool_name,
+                        "ok": error is None,
+                        "status": status,
+                        "duration_ms": round(elapsed_ms, 1),
+                        "args": args_text,
+                    },
+                )
 
         # Preserve signature for introspection / tooling.
         wrapper.__signature__ = inspect.signature(inner)  # type: ignore[attr-defined]

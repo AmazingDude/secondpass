@@ -1,4 +1,8 @@
-"""Queryable pipeline audit trail (SQLite), separate from hooks.py live logs.
+"""Queryable pipeline audit trail (SQLite).
+
+Includes pipeline stages (schema_validation, confidence_gate, …) and, when a
+job_id is in audit_scope, CLI-equivalent hook rows from hooks.py
+(agent_event / tool_call) so one poll returns a mixed chronological feed.
 
 Storage choice for prompt I/O: redacted summaries only — per-message role,
 character lengths, and a short preview. Full prompts can exceed practical
@@ -25,6 +29,21 @@ STAGE_CHROMA_PROMOTE = "chroma_promote"
 STAGE_REVIEW_PERSISTED = "review_persisted"
 STAGE_VERIFIED_OUTCOME = "verified_outcome_write"
 STAGE_REVIEW_COMPLETE = "review_complete"
+# Live CLI-equivalent hook events (hooks.py), stored in the same audit_events
+# table so one job_id-keyed poll returns stages + agent/tool lines in order.
+STAGE_AGENT_EVENT = "agent_event"
+STAGE_TOOL_CALL = "tool_call"
+
+HOOK_STAGES = frozenset({STAGE_AGENT_EVENT, STAGE_TOOL_CALL})
+
+
+def event_kind(stage: str) -> str:
+    """Classify an audit row for API/UI: stage | agent_event | tool."""
+    if stage == STAGE_AGENT_EVENT:
+        return "agent_event"
+    if stage == STAGE_TOOL_CALL:
+        return "tool"
+    return "stage"
 
 _PREVIEW_CHARS = 240
 
