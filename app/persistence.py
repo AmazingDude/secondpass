@@ -8,9 +8,11 @@ from __future__ import annotations
 
 import json
 import sqlite3
+import threading
+from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterator
 
 from pydantic import BaseModel, Field
 
@@ -19,6 +21,8 @@ from app.schema import Finding, ReviewResult
 
 _ROOT = Path(__file__).resolve().parent.parent
 DEFAULT_DB_PATH = _ROOT / ".secondpass" / "secondpass.db"
+_DB_INIT_LOCK = threading.RLock()
+_SQLITE_TIMEOUT_SECONDS = 30.0
 
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS reviews (
@@ -109,10 +113,23 @@ def _resolve_db_path(db_path: Path | str | None = None) -> Path:
 def _connect(db_path: Path | str | None = None) -> sqlite3.Connection:
     path = _resolve_db_path(db_path)
     path.parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(path)
+    # Every operation owns its connection, so no sqlite3 connection crosses
+    # thread boundaries. busy_timeout lets concurrent file reviews serialize
+    # short write transactions instead of failing immediately with "locked".
+    conn = sqlite3.connect(path, timeout=_SQLITE_TIMEOUT_SECONDS)
     conn.row_factory = sqlite3.Row
     conn.execute("PRAGMA foreign_keys = ON")
+    conn.execute(f"PRAGMA busy_timeout = {int(_SQLITE_TIMEOUT_SECONDS * 1000)}")
     return conn
+
+
+@contextmanager
+def _connection(db_path: Path | str | None = None) -> Iterator[sqlite3.Connection]:
+    conn = _connect(db_path)
+    try:
+        yield conn
+    finally:
+        conn.close()
 
 
 def _normalize_path(path: str) -> str:
@@ -207,10 +224,14 @@ def _migrate_schema(conn: sqlite3.Connection) -> None:
 def init_db(db_path: Path | str | None = None) -> Path:
     """Create the DB file and tables if they do not exist. Returns the path used."""
     path = _resolve_db_path(db_path)
-    with _connect(path) as conn:
-        conn.executescript(_SCHEMA_SQL)
-        _migrate_schema(conn)
-        conn.commit()
+    # Multiple review threads can reach first-use initialization together.
+    # Serialize schema/migration work; WAL + busy_timeout handle normal writes.
+    with _DB_INIT_LOCK:
+        with _connection(path) as conn:
+            conn.execute("PRAGMA journal_mode = WAL")
+            conn.executescript(_SCHEMA_SQL)
+            _migrate_schema(conn)
+            conn.commit()
     return path
 
 
@@ -227,7 +248,7 @@ def save_review(
     when = created_at or review_result.timestamp
     file_path = _normalize_path(review_result.file_path)
 
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO reviews (
@@ -264,7 +285,7 @@ def get_review(
     db_path: Path | str | None = None,
 ) -> StoredReview | None:
     init_db(db_path)
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         row = conn.execute(
             "SELECT * FROM reviews WHERE id = ?", (review_id,)
         ).fetchone()
@@ -279,7 +300,7 @@ def list_reviews(
     """Return newest reviews first."""
     init_db(db_path)
     limit = max(0, limit)
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT * FROM reviews
@@ -310,7 +331,7 @@ def save_verified_outcome(
     when = created_at or datetime.now(timezone.utc)
     norm_path = _normalize_path(file_path)
 
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO verified_outcomes (
@@ -345,7 +366,7 @@ def list_outcomes_for_file(
     """Return verified outcomes for a file, newest first."""
     init_db(db_path)
     norm_path = _normalize_path(file_path)
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT * FROM verified_outcomes
@@ -370,7 +391,7 @@ def save_audit_event(
     init_db(db_path)
     when = timestamp or datetime.now(timezone.utc)
     payload = detail if isinstance(detail, dict) else {}
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         cursor = conn.execute(
             """
             INSERT INTO audit_events (
@@ -400,7 +421,7 @@ def list_audit_events(
 ) -> list[StoredAuditEvent]:
     """Return the full audit trail for a job_id in insertion order."""
     init_db(db_path)
-    with _connect(db_path) as conn:
+    with _connection(db_path) as conn:
         rows = conn.execute(
             """
             SELECT * FROM audit_events

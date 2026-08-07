@@ -15,6 +15,7 @@ from rich.text import Text
 from app.agent import review_changed_files
 from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
+from app.multifile import discover_python_files, review_python_files
 from app.progress import ReviewProgress
 from app.scanner import ScanError
 from app.supervisor import supervise_review
@@ -459,6 +460,34 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
     console.print(Panel.fit(header, border_style="white"))
 
 
+def _display_multi_file_summary(aggregate: dict[str, Any], *, root: Path) -> None:
+    """Render deterministic code-level totals and one row per selected file."""
+    table = Table(title="Multi-file review summary")
+    table.add_column("File", overflow="fold")
+    table.add_column("Accepted", justify="right", style="green")
+    table.add_column("Needs review", justify="right", style="yellow")
+    for item in aggregate["files"]:
+        item_path = Path(item["path"])
+        try:
+            display_path = item_path.relative_to(root).as_posix()
+        except ValueError:
+            display_path = str(item_path)
+        table.add_row(
+            display_path,
+            str(item["accepted_count"]),
+            str(item["needs_review_count"]),
+        )
+
+    console.print()
+    console.print(table)
+    console.print(
+        "[bold]Merged summary:[/bold] "
+        f"{aggregate['file_count']} file(s) | "
+        f"[green]{aggregate['accepted_count']} accepted[/green] | "
+        f"[yellow]{aggregate['needs_review_count']} needs review[/yellow]"
+    )
+
+
 @app.command()
 def review(
     path: Path | None = typer.Argument(
@@ -475,6 +504,18 @@ def review(
             "Review files from git diff (staged preferred; unstaged if nothing "
             "is staged). Analyzes whole files, reports only findings on changed lines."
         ),
+    ),
+    max_files: int = typer.Option(
+        10,
+        "--max-files",
+        min=1,
+        help="Maximum sorted .py files to review when PATH is a directory.",
+    ),
+    workers: int = typer.Option(
+        2,
+        "--workers",
+        min=1,
+        help="Concurrent file reviews for a directory; use 1 for sequential.",
     ),
 ) -> None:
     """Run the full secondpass agent review and display a structured report."""
@@ -531,6 +572,38 @@ def review(
                     mode=selection.mode,
                     on_stage=on_stage,
                 )
+        elif path is not None and path.is_dir():
+            root = path.resolve()
+            discovered = discover_python_files(root)
+            selected = discovered[:max_files]
+            if not selected:
+                console.print(f"[yellow]No Python files found under[/yellow] {root}")
+                return
+
+            cap_note = (
+                f"; capped from {len(discovered)} by --max-files"
+                if len(discovered) > len(selected)
+                else ""
+            )
+            console.print(
+                f"[bold]Selected Python files[/bold] "
+                f"({len(selected)} file(s){cap_note}):"
+            )
+            for selected_path in selected:
+                console.print(f"  • {selected_path.relative_to(root).as_posix()}")
+            console.print()
+
+            aggregate = review_python_files(
+                selected,
+                workers=workers,
+                review_one=supervise_review,
+                on_file_start=lambda file_path, index, total: console.print(
+                    f"[bold cyan]Reviewing {index}/{total}[/bold cyan] "
+                    f"{file_path.relative_to(root).as_posix()}"
+                ),
+            )
+            _display_multi_file_summary(aggregate, root=root)
+            return
         else:
             console.print(
                 f"[bold]Starting review of[/bold] {path}\n"

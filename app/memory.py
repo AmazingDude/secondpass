@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import threading
 import uuid
 from pathlib import Path
 from typing import Any
@@ -15,6 +16,7 @@ _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_LESSONS_PATH = _ROOT / "security_lessons.json"
 _DEFAULT_DB_PATH = _ROOT / ".chromadb"
 _COLLECTION_NAME = "security_lessons"
+_MEMORY_INIT_LOCK = threading.RLock()
 
 
 def _lesson_document(lesson: dict[str, Any]) -> str:
@@ -42,10 +44,11 @@ def _lesson_metadata(lesson: dict[str, Any]) -> dict[str, str]:
 
 def init_memory(persist_directory: str | Path | None = None) -> chromadb.Collection:
     """Initialize a persistent ChromaDB collection on disk."""
-    db_path = Path(persist_directory) if persist_directory else _DEFAULT_DB_PATH
-    db_path.mkdir(parents=True, exist_ok=True)
-    client = chromadb.PersistentClient(path=str(db_path))
-    return client.get_or_create_collection(name=_COLLECTION_NAME)
+    with _MEMORY_INIT_LOCK:
+        db_path = Path(persist_directory) if persist_directory else _DEFAULT_DB_PATH
+        db_path.mkdir(parents=True, exist_ok=True)
+        client = chromadb.PersistentClient(path=str(db_path))
+        return client.get_or_create_collection(name=_COLLECTION_NAME)
 
 
 def seed_memory(
@@ -53,26 +56,29 @@ def seed_memory(
     persist_directory: str | Path | None = None,
 ) -> int:
     """Load lessons from JSON and embed them if the collection is empty."""
-    collection = init_memory(persist_directory)
-    if collection.count() > 0:
-        return 0
+    # Each file review seeds on startup. Keep the count-then-add transaction
+    # atomic so parallel reviews neither double-add nor race Chroma bootstrap.
+    with _MEMORY_INIT_LOCK:
+        collection = init_memory(persist_directory)
+        if collection.count() > 0:
+            return 0
 
-    path = Path(lessons_path) if lessons_path else _DEFAULT_LESSONS_PATH
-    lessons = json.loads(path.read_text(encoding="utf-8"))
-    if not lessons:
-        return 0
+        path = Path(lessons_path) if lessons_path else _DEFAULT_LESSONS_PATH
+        lessons = json.loads(path.read_text(encoding="utf-8"))
+        if not lessons:
+            return 0
 
-    ids: list[str] = []
-    documents: list[str] = []
-    metadatas: list[dict[str, str]] = []
-    for lesson in lessons:
-        lesson_id = str(lesson.get("id") or f"lesson-{uuid.uuid4()}")
-        ids.append(lesson_id)
-        documents.append(_lesson_document(lesson))
-        metadatas.append(_lesson_metadata(lesson))
+        ids: list[str] = []
+        documents: list[str] = []
+        metadatas: list[dict[str, str]] = []
+        for lesson in lessons:
+            lesson_id = str(lesson.get("id") or f"lesson-{uuid.uuid4()}")
+            ids.append(lesson_id)
+            documents.append(_lesson_document(lesson))
+            metadatas.append(_lesson_metadata(lesson))
 
-    collection.add(ids=ids, documents=documents, metadatas=metadatas)
-    return len(ids)
+        collection.add(ids=ids, documents=documents, metadatas=metadatas)
+        return len(ids)
 
 
 @log_tool_call
