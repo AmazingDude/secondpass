@@ -15,7 +15,7 @@ from rich.text import Text
 from app.agent import review_changed_files
 from app.gitdiff import GitDiffError, collect_diff_selection
 from app.memory import search_memory, seed_memory
-from app.multifile import discover_python_files, review_python_files
+from app.multifile import FileSelection, review_python_files, select_python_files
 from app.progress import ReviewProgress
 from app.scanner import ScanError
 from app.supervisor import supervise_review
@@ -460,6 +460,42 @@ def _display_combined_summary(report: dict[str, Any]) -> None:
     console.print(Panel.fit(header, border_style="white"))
 
 
+def _display_file_selection(selection: FileSelection) -> None:
+    """Print discovery/filter/cap counts and the exact selected relative paths."""
+    console.print(f"[bold]Directory review[/bold] root={selection.root}")
+    init_note = ""
+    if not selection.include_init and selection.skipped_init_count:
+        init_note = " (default; use --include-init)"
+    console.print(
+        f"discovered={selection.discovered_count}  "
+        f"junk_dirs_pruned={selection.junk_dirs_pruned}  "
+        f"skipped_init={selection.skipped_init_count}{init_note}  "
+        f"skipped_trivial={selection.skipped_trivial_count}  "
+        f"include_filtered={selection.skipped_include_count}  "
+        f"exclude_filtered={selection.skipped_exclude_count}  "
+        f"eligible={selection.eligible_count}  "
+        f"selected={selection.selected_count}"
+        + ("  capped=yes" if selection.capped else "  capped=no")
+    )
+    if not selection.include_init:
+        console.print(
+            "[dim]Default excludes __init__.py under a file cap "
+            "(low expected Security/Architecture signal); "
+            "pass --include-init to opt in. Trivial empty/comment/"
+            "docstring-only modules are always skipped.[/dim]"
+        )
+    if selection.selected:
+        console.print(
+            f"[bold]Selected Python files[/bold] "
+            f"({selection.selected_count} file(s), execution order):"
+        )
+        for relative in selection.relative_selected():
+            console.print(f"  • {relative}")
+    else:
+        console.print("[yellow]No eligible Python files after filtering.[/yellow]")
+    console.print()
+
+
 def _display_multi_file_summary(aggregate: dict[str, Any], *, root: Path) -> None:
     """Render deterministic code-level totals and one row per selected file."""
     table = Table(title="Multi-file review summary")
@@ -509,13 +545,43 @@ def review(
         10,
         "--max-files",
         min=1,
-        help="Maximum sorted .py files to review when PATH is a directory.",
+        help=(
+            "Max eligible .py files after filters (sorted alphabetically). "
+            "Applied only after junk/init/trivial/include/exclude filtering."
+        ),
     ),
     workers: int = typer.Option(
         2,
         "--workers",
         min=1,
         help="Concurrent file reviews for a directory; use 1 for sequential.",
+    ),
+    include_init: bool = typer.Option(
+        False,
+        "--include-init",
+        help=(
+            "Include __init__.py files in directory reviews. Default excludes "
+            "them under --max-files because Security/Architecture issues "
+            "almost never live in package markers (not a claim they are "
+            "always safe). Trivial empty/comment/docstring-only inits still "
+            "skip even with this flag."
+        ),
+    ),
+    include: list[str] = typer.Option(
+        [],
+        "--include",
+        help=(
+            "Repeatable glob of relative POSIX paths to keep "
+            '(e.g. --include "architecture/*.py").'
+        ),
+    ),
+    exclude: list[str] = typer.Option(
+        [],
+        "--exclude",
+        help=(
+            "Repeatable glob of relative POSIX paths to drop "
+            '(e.g. --exclude "tests/**").'
+        ),
     ),
 ) -> None:
     """Run the full secondpass agent review and display a structured report."""
@@ -573,36 +639,27 @@ def review(
                     on_stage=on_stage,
                 )
         elif path is not None and path.is_dir():
-            root = path.resolve()
-            discovered = discover_python_files(root)
-            selected = discovered[:max_files]
-            if not selected:
-                console.print(f"[yellow]No Python files found under[/yellow] {root}")
+            selection = select_python_files(
+                path,
+                max_files=max_files,
+                include_init=include_init,
+                include=include,
+                exclude=exclude,
+            )
+            _display_file_selection(selection)
+            if not selection.selected:
                 return
 
-            cap_note = (
-                f"; capped from {len(discovered)} by --max-files"
-                if len(discovered) > len(selected)
-                else ""
-            )
-            console.print(
-                f"[bold]Selected Python files[/bold] "
-                f"({len(selected)} file(s){cap_note}):"
-            )
-            for selected_path in selected:
-                console.print(f"  • {selected_path.relative_to(root).as_posix()}")
-            console.print()
-
             aggregate = review_python_files(
-                selected,
+                selection.selected,
                 workers=workers,
                 review_one=supervise_review,
                 on_file_start=lambda file_path, index, total: console.print(
                     f"[bold cyan]Reviewing {index}/{total}[/bold cyan] "
-                    f"{file_path.relative_to(root).as_posix()}"
+                    f"{file_path.relative_to(selection.root).as_posix()}"
                 ),
             )
-            _display_multi_file_summary(aggregate, root=root)
+            _display_multi_file_summary(aggregate, root=selection.root)
             return
         else:
             console.print(

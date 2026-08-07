@@ -3,14 +3,21 @@
 from __future__ import annotations
 
 import json
+import os
 import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 
+import pytest
+
 from app.confidence_gate import GateResult
-from app.multifile import review_python_files, select_python_files
+from app.multifile import (
+    is_trivial_python_source,
+    review_python_files,
+    select_python_files,
+)
 from app.persistence import (
     list_audit_events,
     list_reviews,
@@ -18,6 +25,26 @@ from app.persistence import (
     save_review,
 )
 from app.schema import ReviewResult
+
+
+def _write(root: Path, relative: str, content: str) -> Path:
+    target = root / relative
+    target.parent.mkdir(parents=True, exist_ok=True)
+    target.write_text(content, encoding="utf-8")
+    return target
+
+
+def test_is_trivial_python_source_rules() -> None:
+    assert is_trivial_python_source("")
+    assert is_trivial_python_source("   \n# comment\n")
+    assert is_trivial_python_source('"""module doc"""\n')
+    assert is_trivial_python_source("pass\n")
+    assert is_trivial_python_source('"""doc"""\npass\n')
+    assert not is_trivial_python_source("x = 1\n")
+    assert not is_trivial_python_source("from . import foo\n")
+    assert not is_trivial_python_source("def f():\n    return 1\n")
+    # Unparsable source is not classified as trivial.
+    assert not is_trivial_python_source("def broken(\n")
 
 
 def test_select_python_files_sorts_before_cap_and_skips_junk(tmp_path: Path) -> None:
@@ -28,21 +55,128 @@ def test_select_python_files_sorts_before_cap_and_skips_junk(tmp_path: Path) -> 
         "pkg/b_second.py",
         "README.md",
         ".venv/ignored.py",
+        "venv/ignored.py",
+        "env/ignored.py",
         "node_modules/ignored.py",
         ".git/ignored.py",
         "pkg/__pycache__/ignored.py",
+        "dist/ignored.py",
+        "build/ignored.py",
+        ".pytest_cache/ignored.py",
     ):
-        target = tmp_path / relative
-        target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text("# fixture\n", encoding="utf-8")
+        _write(tmp_path, relative, "value = 1\n")
 
-    selected = select_python_files(tmp_path, max_files=3)
+    selection = select_python_files(tmp_path, max_files=3)
 
-    assert [path.relative_to(tmp_path).as_posix() for path in selected] == [
+    assert selection.relative_selected() == [
         "a_first.py",
         "pkg/b_second.py",
         "pkg/c_mid.py",
     ]
+    assert selection.discovered_count == 4
+    assert selection.eligible_count == 4
+    assert selection.capped is True
+    assert selection.junk_dirs_pruned >= 1
+
+
+def test_default_excludes_init_even_when_nontrivial(tmp_path: Path) -> None:
+    _write(tmp_path, "__init__.py", "from .mod import x\n")
+    _write(tmp_path, "pkg/__init__.py", "")
+    _write(tmp_path, "mod.py", "x = 1\n")
+
+    selection = select_python_files(tmp_path, max_files=10)
+
+    assert selection.relative_selected() == ["mod.py"]
+    assert selection.skipped_init_count == 2
+    assert selection.skipped_trivial_count == 0
+
+
+def test_include_init_keeps_nontrivial_and_skips_trivial_init(tmp_path: Path) -> None:
+    _write(tmp_path, "__init__.py", '"""package"""\n')
+    _write(tmp_path, "pkg/__init__.py", "from .mod import helper\n")
+    _write(tmp_path, "pkg/mod.py", "def helper():\n    return 1\n")
+
+    selection = select_python_files(tmp_path, max_files=10, include_init=True)
+
+    assert selection.relative_selected() == [
+        "pkg/__init__.py",
+        "pkg/mod.py",
+    ]
+    assert selection.skipped_init_count == 0
+    assert selection.skipped_trivial_count == 1
+
+
+def test_skips_comment_and_docstring_only_non_init(tmp_path: Path) -> None:
+    _write(tmp_path, "comments_only.py", "# just a note\n")
+    _write(tmp_path, "doc_only.py", '"""docs"""\n')
+    _write(tmp_path, "real.py", "SECRET = 'x'\n")
+
+    selection = select_python_files(tmp_path, max_files=10)
+
+    assert selection.relative_selected() == ["real.py"]
+    assert selection.skipped_trivial_count == 2
+
+
+def test_syntax_invalid_file_stays_eligible(tmp_path: Path) -> None:
+    _write(tmp_path, "broken.py", "def broken(\n")
+    _write(tmp_path, "ok.py", "x = 1\n")
+
+    selection = select_python_files(tmp_path, max_files=10)
+
+    assert selection.relative_selected() == ["broken.py", "ok.py"]
+    assert selection.skipped_trivial_count == 0
+
+
+def test_include_and_exclude_filters_before_cap(tmp_path: Path) -> None:
+    _write(tmp_path, "architecture/a.py", "x = 1\n")
+    _write(tmp_path, "architecture/b.py", "y = 2\n")
+    _write(tmp_path, "tests/nested/t.py", "z = 3\n")
+    _write(tmp_path, "other.py", "w = 4\n")
+
+    selection = select_python_files(
+        tmp_path,
+        max_files=1,
+        include=["architecture/*.py", "tests/**"],
+        exclude=["tests/**", "architecture/b.py"],
+    )
+
+    assert selection.relative_selected() == ["architecture/a.py"]
+    assert selection.skipped_include_count == 1  # other.py
+    assert selection.skipped_exclude_count == 2  # tests/nested/t.py + architecture/b.py
+    assert selection.eligible_count == 1
+    assert selection.capped is False
+
+
+def test_empty_directory_is_clear_non_crash(tmp_path: Path) -> None:
+    selection = select_python_files(tmp_path, max_files=4)
+    assert selection.selected == ()
+    assert selection.discovered_count == 0
+    assert selection.eligible_count == 0
+
+
+def test_no_eligible_after_filters(tmp_path: Path) -> None:
+    _write(tmp_path, "__init__.py", "")
+    _write(tmp_path, "emptyish.py", "# noop\n")
+    selection = select_python_files(tmp_path, max_files=4)
+    assert selection.selected == ()
+    assert selection.skipped_init_count == 1
+    assert selection.skipped_trivial_count == 1
+
+
+def test_symlink_directories_are_not_traversed(tmp_path: Path) -> None:
+    real = tmp_path / "real_pkg"
+    real.mkdir()
+    (real / "hidden.py").write_text("x = 1\n", encoding="utf-8")
+    link = tmp_path / "linked_pkg"
+    try:
+        os.symlink(real, link, target_is_directory=True)
+    except OSError:
+        pytest.skip("symlink creation not permitted on this host")
+
+    _write(tmp_path, "visible.py", "y = 2\n")
+    selection = select_python_files(tmp_path, max_files=10)
+    assert selection.relative_selected() == ["visible.py"]
+    assert "linked_pkg/hidden.py" not in selection.relative_selected()
 
 
 def test_review_python_files_sequentially_aggregates_per_file_counts(
@@ -238,3 +372,36 @@ def test_single_file_cli_still_calls_supervise_review_once(
     assert result.exit_code == 0, result.output
     assert calls == [str(target.resolve())]
     assert "Starting review of" in result.output
+
+
+def test_directory_cli_prints_selection_and_skips_init(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    _write(tmp_path, "__init__.py", "")
+    _write(tmp_path, "a_mod.py", "x = 1\n")
+    _write(tmp_path, "b_mod.py", "y = 2\n")
+    reviewed: list[str] = []
+
+    def fake_supervise(path: str) -> dict:
+        reviewed.append(Path(path).name)
+        return {
+            "path": path,
+            "summary": {"accepted_count": 0, "needs_review_count": 0},
+        }
+
+    monkeypatch.setattr(cli, "supervise_review", fake_supervise)
+    result = CliRunner().invoke(
+        cli.app,
+        ["review", str(tmp_path), "--max-files", "4", "--workers", "1"],
+    )
+
+    assert result.exit_code == 0, result.output
+    assert "skipped_init=1" in result.output
+    assert "a_mod.py" in result.output
+    assert "b_mod.py" in result.output
+    assert "__init__.py" not in reviewed
+    assert reviewed == ["a_mod.py", "b_mod.py"]
