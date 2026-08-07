@@ -36,6 +36,14 @@ _KIND_FIELD_WIDTH = 12  # "agent_event"
 # Which multi-agent role is currently executing (supervisor / memory_worker / …).
 _current_agent: ContextVar[str] = ContextVar("secondpass_agent", default="system")
 
+# Live stderr agent/tool traces (multi-file quiet mode turns these off).
+_stderr_live_enabled: ContextVar[bool] = ContextVar(
+    "secondpass_stderr_live", default=True
+)
+_stderr_file_label: ContextVar[str | None] = ContextVar(
+    "secondpass_stderr_file", default=None
+)
+
 
 def get_current_agent() -> str:
     return _current_agent.get()
@@ -51,12 +59,37 @@ def agent_scope(agent_name: str) -> Iterator[None]:
         _current_agent.reset(token)
 
 
+@contextmanager
+def live_stderr_scope(
+    *,
+    enabled: bool = True,
+    file_label: str | None = None,
+) -> Iterator[None]:
+    """Control live stderr traces; optional short filename prefix for parallel runs."""
+    enabled_token = _stderr_live_enabled.set(enabled)
+    label_token = _stderr_file_label.set(file_label)
+    try:
+        yield
+    finally:
+        _stderr_live_enabled.reset(enabled_token)
+        _stderr_file_label.reset(label_token)
+
+
 def _live_clock(now: datetime) -> str:
     return now.strftime("%H:%M:%S")
 
 
+def _prepend_file_label(line: Text) -> None:
+    label = _stderr_file_label.get()
+    if label:
+        line.append(f"[{label}] ", style="dim")
+
+
 def _print_agent_stderr(now: datetime, message: str) -> None:
+    if not _stderr_live_enabled.get():
+        return
     line = Text()
+    _prepend_file_label(line)
     line.append("[agent]", style="bold cyan")
     line.append(" ")
     line.append(_live_clock(now), style="dim")
@@ -76,9 +109,12 @@ def _print_tool_stderr(
     duration_ms: float,
     args_text: str,
 ) -> None:
+    if not _stderr_live_enabled.get():
+        return
     agent_field = f"agent={agent_name}"
     tool_field = f"tool={tool_name}"
     line = Text()
+    _prepend_file_label(line)
     line.append("[tool] ", style="bold magenta")  # pad to same width as [agent]
     line.append(_live_clock(now), style="dim")
     line.append(" | ", style="dim")

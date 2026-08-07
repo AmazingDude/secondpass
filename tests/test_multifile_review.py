@@ -147,6 +147,22 @@ def test_include_and_exclude_filters_before_cap(tmp_path: Path) -> None:
     assert selection.capped is False
 
 
+def test_include_accepts_click_windows_expanded_paths(tmp_path: Path) -> None:
+    """Click on Windows may turn ``**/a.py`` into a cwd-relative real path."""
+    target = _write(tmp_path, "architecture/a.py", "x = 1\n")
+    _write(tmp_path, "architecture/b.py", "y = 2\n")
+
+    selection = select_python_files(
+        tmp_path,
+        max_files=10,
+        # Simulate Click's Windows argv expansion (absolute or cwd-relative).
+        include=[str(target), str(target).replace("/", "\\")],
+    )
+
+    assert selection.relative_selected() == ["architecture/a.py"]
+    assert selection.skipped_include_count == 1
+
+
 def test_empty_directory_is_clear_non_crash(tmp_path: Path) -> None:
     selection = select_python_files(tmp_path, max_files=4)
     assert selection.selected == ()
@@ -405,3 +421,68 @@ def test_directory_cli_prints_selection_and_skips_init(
     assert "b_mod.py" in result.output
     assert "__init__.py" not in reviewed
     assert reviewed == ["a_mod.py", "b_mod.py"]
+    assert "Quiet mode" in result.output
+    assert "running" in result.output
+    assert "done" in result.output
+    assert "accepted=0" in result.output
+
+
+def test_directory_cli_verbose_flag_is_accepted(
+    tmp_path: Path, monkeypatch
+) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    _write(tmp_path, "only.py", "x = 1\n")
+
+    def fake_supervise(path: str) -> dict:
+        return {
+            "path": path,
+            "summary": {"accepted_count": 1, "needs_review_count": 0},
+        }
+
+    monkeypatch.setattr(cli, "supervise_review", fake_supervise)
+    result = CliRunner().invoke(
+        cli.app,
+        [
+            "review",
+            str(tmp_path),
+            "--max-files",
+            "2",
+            "--workers",
+            "2",
+            "--verbose",
+        ],
+    )
+    assert result.exit_code == 0, result.output
+    assert "Quiet mode" not in result.output
+    assert "done" in result.output
+    assert "accepted=1" in result.output
+
+
+def test_review_python_files_invokes_start_and_done_callbacks(
+    tmp_path: Path,
+) -> None:
+    paths = [tmp_path / "a.py", tmp_path / "b.py"]
+    started: list[str] = []
+    done: list[str] = []
+
+    def fake_supervise(path: str) -> dict:
+        return {
+            "path": path,
+            "summary": {"accepted_count": 0, "needs_review_count": 0},
+        }
+
+    aggregate = review_python_files(
+        paths,
+        workers=2,
+        review_one=fake_supervise,
+        on_file_start=lambda path, index, total: started.append(
+            f"{index}/{total}:{path.name}"
+        ),
+        on_file_done=lambda path, report: done.append(path.name),
+    )
+    assert sorted(started) == ["1/2:a.py", "2/2:b.py"]
+    assert sorted(done) == ["a.py", "b.py"]
+    assert aggregate["file_count"] == 2

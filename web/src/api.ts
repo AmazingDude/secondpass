@@ -36,6 +36,8 @@ export type ReviewPayload = {
     worker_name: string;
     /** Distinct from needs_review: coverage failed (e.g. rate limit), not a low-confidence finding. */
     coverage_status?: "ok" | "inconclusive" | null;
+    /** Architecture: LLM claimed finding(s) that post-filters rejected — not genuine clean. */
+    claim_status?: "unverified" | null;
   };
   gate_result: GateResult;
 };

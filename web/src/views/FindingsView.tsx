@@ -72,11 +72,15 @@ export function FindingsView({
   const coverageIncomplete = reviews.some(
     (r) => r.review_result.coverage_status === "inconclusive",
   );
+  const claimUnverified = reviews.some(
+    (r) => r.review_result.claim_status === "unverified",
+  );
   const cleanWorkers = reviews.filter(
     (r) =>
       r.accepted_count === 0 &&
       r.needs_review_count === 0 &&
-      r.review_result.coverage_status !== "inconclusive",
+      r.review_result.coverage_status !== "inconclusive" &&
+      r.review_result.claim_status !== "unverified",
   );
 
   return (
@@ -120,6 +124,14 @@ export function FindingsView({
             Coverage incomplete
           </span>
         ) : null}
+        {claimUnverified ? (
+          <span
+            className="badge badge-incomplete"
+            title="Architecture claimed an issue that did not meet the evidence bar"
+          >
+            Evidence bar not met
+          </span>
+        ) : null}
         {cleanWorkers.length > 0 && findings.length > 0
           ? cleanWorkers.map((r) => (
               <span
@@ -146,6 +158,15 @@ export function FindingsView({
             Coverage inconclusive — logic review could not complete (for
             example rate-limited). This is not a clean result, and it is not a
             low-confidence finding.
+          </p>
+        </div>
+      ) : findings.length === 0 && claimUnverified ? (
+        <div className="card clean-state">
+          <span className="badge badge-incomplete">Evidence bar not met</span>
+          <p className="empty-detail">
+            Architecture flagged a possible issue that didn&apos;t meet the
+            evidence bar — see the audit trail. This is not the same as a clean
+            review, and the filtered claim is not listed as a finding.
           </p>
         </div>
       ) : findings.length === 0 ? (

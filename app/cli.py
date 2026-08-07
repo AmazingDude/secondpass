@@ -14,6 +14,7 @@ from rich.text import Text
 
 from app.agent import review_changed_files
 from app.gitdiff import GitDiffError, collect_diff_selection
+from app.hooks import live_stderr_scope
 from app.memory import search_memory, seed_memory
 from app.multifile import FileSelection, review_python_files, select_python_files
 from app.progress import ReviewProgress
@@ -368,15 +369,27 @@ def _display_architecture_report(report: dict[str, Any]) -> None:
     accepted = report.get("accepted") or []
     needs_review = report.get("needs_review") or []
     if not accepted and not needs_review:
+        claim_unverified = bool(report.get("claim_unverified"))
+        message = str(
+            report.get("message")
+            or (
+                "Architecture flagged a possible issue that didn't meet the "
+                "evidence bar — see audit trail."
+                if claim_unverified
+                else "No architecture issues found."
+            )
+        )
         console.print()
         console.print(
             Panel(
                 Text(
-                    str(report.get("message") or "No architecture issues found."),
-                    style="green",
+                    message,
+                    style="yellow" if claim_unverified else "green",
                 ),
-                title="No issues found",
-                border_style="green",
+                title=(
+                    "Evidence bar not met" if claim_unverified else "No issues found"
+                ),
+                border_style="yellow" if claim_unverified else "green",
                 padding=(1, 2),
             )
         )
@@ -572,7 +585,7 @@ def review(
         "--include",
         help=(
             "Repeatable glob of relative POSIX paths to keep "
-            '(e.g. --include "architecture/*.py").'
+            '(e.g. --include "architecture/*.py" or --include "**/checkout_handler.py").'
         ),
     ),
     exclude: list[str] = typer.Option(
@@ -581,6 +594,16 @@ def review(
         help=(
             "Repeatable glob of relative POSIX paths to drop "
             '(e.g. --exclude "tests/**").'
+        ),
+    ),
+    verbose: bool = typer.Option(
+        False,
+        "--verbose",
+        "-v",
+        help=(
+            "Directory reviews: print full agent/tool stderr traces. "
+            "With --workers > 1, each line is prefixed with the short filename. "
+            "Single-file reviews always show traces (this flag is unused there)."
         ),
     ),
 ) -> None:
@@ -650,14 +673,43 @@ def review(
             if not selection.selected:
                 return
 
+            root = selection.root
+
+            def _on_file_start(file_path: Path, index: int, total: int) -> None:
+                rel = file_path.relative_to(root).as_posix()
+                console.print(
+                    f"[cyan]running[/cyan] {index}/{total} {rel}",
+                    highlight=False,
+                )
+
+            def _on_file_done(file_path: Path, report: dict[str, Any]) -> None:
+                rel = file_path.relative_to(root).as_posix()
+                summary = report.get("summary") or {}
+                accepted = int(summary.get("accepted_count") or 0)
+                needs = int(summary.get("needs_review_count") or 0)
+                console.print(
+                    f"[green]done[/green]    {rel}  "
+                    f"accepted={accepted} needs_review={needs}",
+                    highlight=False,
+                )
+
+            def _review_one(path_str: str) -> dict[str, Any]:
+                label = Path(path_str).name if verbose and workers > 1 else None
+                with live_stderr_scope(enabled=verbose, file_label=label):
+                    return supervise_review(path_str)
+
+            if not verbose:
+                console.print(
+                    "[dim]Quiet mode (default): per-file status only. "
+                    "Pass --verbose for full agent/tool traces.[/dim]\n"
+                )
+
             aggregate = review_python_files(
                 selection.selected,
                 workers=workers,
-                review_one=supervise_review,
-                on_file_start=lambda file_path, index, total: console.print(
-                    f"[bold cyan]Reviewing {index}/{total}[/bold cyan] "
-                    f"{file_path.relative_to(selection.root).as_posix()}"
-                ),
+                review_one=_review_one,
+                on_file_start=_on_file_start,
+                on_file_done=_on_file_done,
             )
             _display_multi_file_summary(aggregate, root=selection.root)
             return
@@ -998,4 +1050,7 @@ def audit_cmd(
 
 
 if __name__ == "__main__":
-    app()
+    # Click's Windows default expands ``*`` / ``**`` in argv against cwd before
+    # Typer sees them. That breaks --include/--exclude, which are intentional
+    # globs we match against root-relative paths in app.multifile.
+    app(windows_expand_args=False)

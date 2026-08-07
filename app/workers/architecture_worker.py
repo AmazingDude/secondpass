@@ -22,6 +22,13 @@ _MAX_SOURCE_CHARS = 8000
 _SOFT_SMELL_TYPES = frozenset({"naming_convention", "duplicated_logic"})
 _SOFT_CONFIDENCE_CAP = 79
 
+# User-facing text when the model claimed issues but none survived post-filters.
+# Must not read as genuine clean ("No architecture issues found.").
+CLAIM_UNVERIFIED_SUMMARY = (
+    "Architecture flagged a possible issue that didn't meet the evidence bar "
+    "— see audit trail."
+)
+
 _TARGET_SYMBOL_RE = re.compile(
     r"^(?:def|class)\s+([A-Za-z_][A-Za-z0-9_]*)"
     r"|^([A-Z_][A-Z0-9_]*)\s*=",
@@ -526,6 +533,7 @@ def run_architecture_worker(
         "structured_findings": list[Finding],
         "context_files": [{"path": ..., "relation": ...}, ...],
         "failures": int,
+        "claim_unverified": bool,
       }
     """
     target_source = _read_truncated(target_path)
@@ -536,6 +544,7 @@ def run_architecture_worker(
             "structured_findings": [],
             "context_files": [],
             "failures": 0,
+            "claim_unverified": False,
         }
 
     context_files = gather_cross_file_context(
@@ -578,6 +587,7 @@ def run_architecture_worker(
                 "structured_findings": [],
                 "context_files": context_summary,
                 "failures": failures,
+                "claim_unverified": False,
             }
 
         content = response.choices[0].message.content or ""
@@ -601,21 +611,18 @@ def run_architecture_worker(
                 if finding is not None:
                     structured_findings.append(finding)
 
-        # Guard: model claimed issues but gave nothing specific → clean.
-        # Filters (authz bleed, soft smell, off-target, insufficient-structure)
-        # may drop every issue while the LLM summary still describes the claim.
-        # Keep that claim in the agent_event log; neutralize the user-facing summary.
+        # Claimed but nothing survived filters / empty issues[] → not genuine clean.
+        # Keep LLM claim wording in the audit log only; report an evidence-bar notice.
+        claim_unverified = False
         if has_issues and not structured_findings:
             has_issues = False
+            claim_unverified = True
             log_agent_event(
-                "architecture_worker claimed issues but produced none specific; "
-                "treating as clean"
+                "architecture_worker claimed issues but none met the evidence bar; "
+                f"llm_summary={summary or '(empty)'}"
             )
-            log_agent_event(
-                f"architecture_worker: clean — "
-                f"{summary or 'No architecture issues found.'}"
-            )
-            summary = "No architecture issues found."
+            summary = CLAIM_UNVERIFIED_SUMMARY
+            log_agent_event(f"architecture_worker: claim_unverified — {summary}")
         elif not has_issues:
             summary = summary or "No architecture issues found."
             log_agent_event(f"architecture_worker: clean — {summary}")
@@ -630,4 +637,5 @@ def run_architecture_worker(
             "structured_findings": structured_findings,
             "context_files": context_summary,
             "failures": failures,
+            "claim_unverified": claim_unverified,
         }

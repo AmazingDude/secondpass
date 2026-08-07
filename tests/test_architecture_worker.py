@@ -8,6 +8,7 @@ from types import SimpleNamespace
 from app.context import ContextFile
 from app.schema import Finding
 from app.workers.architecture_worker import (
+    CLAIM_UNVERIFIED_SUMMARY,
     _SYSTEM,
     _issue_to_finding,
     adjust_architecture_confidence,
@@ -588,9 +589,12 @@ def test_run_architecture_worker_drops_soft_smells_from_mocked_llm(
 
     assert result["has_issues"] is False
     assert result["structured_findings"] == []
+    assert result["claim_unverified"] is True
+    assert result["summary"] == CLAIM_UNVERIFIED_SUMMARY
+    assert result["summary"] != "No architecture issues found."
 
 
-def test_run_architecture_worker_treats_ungrounded_claim_as_clean(
+def test_run_architecture_worker_treats_ungrounded_claim_as_unverified(
     tmp_path: Path, monkeypatch
 ) -> None:
     target = tmp_path / "service.py"
@@ -611,7 +615,49 @@ def test_run_architecture_worker_treats_ungrounded_claim_as_clean(
 
     assert result["has_issues"] is False
     assert result["structured_findings"] == []
-    assert result["summary"] == "No architecture issues found."
+    assert result["claim_unverified"] is True
+    assert result["summary"] == CLAIM_UNVERIFIED_SUMMARY
+
+
+def test_genuine_clean_differs_from_claim_unverified(
+    tmp_path: Path, monkeypatch
+) -> None:
+    target = tmp_path / "service.py"
+    target.write_text("def do_thing():\n    pass\n", encoding="utf-8")
+
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.gather_cross_file_context",
+        lambda *args, **kwargs: [],
+    )
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.chat",
+        lambda *args, **kwargs: _fake_response(
+            '{"has_issues": false, "summary": "No architecture issues found.", '
+            '"issues": []}'
+        ),
+    )
+
+    clean = run_architecture_worker(str(target))
+    assert clean["claim_unverified"] is False
+    assert clean["summary"] == "No architecture issues found."
+
+    monkeypatch.setattr(
+        "app.workers.architecture_worker.chat",
+        lambda *args, **kwargs: _fake_response(
+            '{"has_issues": true, "summary": "layering violation in checkout", '
+            '"issues": [{'
+            '"finding_type": "layering_violation", '
+            '"evidence": "mutates the data store directly", '
+            '"confidence": 90, '
+            '"suggested_fix": "use the service layer"'
+            "}]}"
+        ),
+    )
+    unverified = run_architecture_worker(str(target))
+    assert unverified["claim_unverified"] is True
+    assert unverified["structured_findings"] == []
+    assert unverified["summary"] != clean["summary"]
+    assert unverified["summary"] == CLAIM_UNVERIFIED_SUMMARY
 
 
 def test_filtered_claim_does_not_leak_into_user_facing_summary(
@@ -652,10 +698,11 @@ def test_filtered_claim_does_not_leak_into_user_facing_summary(
 
     assert result["has_issues"] is False
     assert result["structured_findings"] == []
-    assert result["summary"] == "No architecture issues found."
+    assert result["claim_unverified"] is True
+    assert result["summary"] == CLAIM_UNVERIFIED_SUMMARY
     assert "ownership" not in result["summary"].lower()
     assert any("missing ownership check" in event for event in events)
-    assert any("claimed issues but produced none specific" in event for event in events)
+    assert any("none met the evidence bar" in event for event in events)
 
 def test_run_architecture_worker_treats_llm_error_as_clean(
     tmp_path: Path, monkeypatch

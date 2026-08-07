@@ -52,3 +52,28 @@ def test_agent_and_tool_stderr_lines_align_and_color(monkeypatch) -> None:
     assert 'args={"args": [["sample.py"]]}' in rendered
     # Color codes present when force_terminal + non-legacy Windows
     assert "\x1b[" in rendered
+
+
+def test_live_stderr_scope_can_suppress_and_prefix(monkeypatch) -> None:
+    buf = StringIO()
+    console = Console(
+        file=buf,
+        force_terminal=False,
+        legacy_windows=False,
+        highlight=False,
+        soft_wrap=True,
+        width=140,
+    )
+    monkeypatch.setattr(hooks, "_stderr_console", console)
+    now = datetime(2026, 8, 3, 13, 35, 39, tzinfo=timezone.utc)
+
+    with hooks.live_stderr_scope(enabled=False):
+        _print_agent_stderr(now, "should not appear")
+    assert buf.getvalue() == ""
+
+    with hooks.live_stderr_scope(enabled=True, file_label="checkout_handler.py"):
+        _print_agent_stderr(now, "architecture_worker reviewing")
+    rendered = buf.getvalue()
+    assert "[checkout_handler.py]" in rendered
+    assert "[agent]" in rendered
+    assert "architecture_worker reviewing" in rendered

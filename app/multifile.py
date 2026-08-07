@@ -173,6 +173,33 @@ def _matches_any(relative: str, patterns: Sequence[str]) -> bool:
     return any(_match_relative(relative, pattern) for pattern in patterns)
 
 
+def normalize_path_pattern(pattern: str, root: Path) -> str:
+    """Keep intentional globs; rewrite shell/Click-expanded paths to root-relative POSIX.
+
+    On Windows, Click expands ``**/foo.py`` against the process cwd before our
+    CLI sees the value. Matching then fails because selection compares
+    root-relative paths like ``architecture/foo.py``. If ``pattern`` resolves
+    to a real file under ``root``, rewrite it to that relative path so include /
+    exclude still work. Globs (any ``*`` / ``?`` / ``[``) are left alone aside
+    from backslash → slash normalization.
+    """
+    normalized = pattern.replace("\\", "/")
+    if any(char in normalized for char in "*?["):
+        return normalized
+
+    candidate = Path(pattern)
+    try:
+        resolved = candidate.resolve()
+    except OSError:
+        return normalized
+    if not resolved.is_file():
+        return normalized
+    try:
+        return relative_posix(resolved, root.resolve())
+    except ValueError:
+        return normalized
+
+
 def select_python_files(
     directory: Path,
     *,
@@ -189,8 +216,12 @@ def select_python_files(
     discovered, junk_dirs_pruned = discover_python_files(root)
     discovered_count = len(discovered)
 
-    include_patterns = tuple(include)
-    exclude_patterns = tuple(exclude)
+    include_patterns = tuple(
+        normalize_path_pattern(pattern, root) for pattern in include
+    )
+    exclude_patterns = tuple(
+        normalize_path_pattern(pattern, root) for pattern in exclude
+    )
 
     skipped_include = 0
     skipped_exclude = 0
@@ -237,6 +268,7 @@ def select_python_files(
 
 ReviewOne = Callable[[str], dict[str, Any]]
 FileStartCallback = Callable[[Path, int, int], None]
+FileDoneCallback = Callable[[Path, dict[str, Any]], None]
 
 
 def review_python_files(
@@ -245,30 +277,34 @@ def review_python_files(
     workers: int,
     review_one: ReviewOne,
     on_file_start: FileStartCallback | None = None,
+    on_file_done: FileDoneCallback | None = None,
 ) -> dict[str, Any]:
     """Run one existing full review per file and combine counts in input order."""
     if workers < 1:
         raise ValueError("workers must be at least 1")
 
     ordered_paths = list(paths)
-    if workers == 1:
-        reports: list[dict[str, Any]] = []
-        for index, path in enumerate(ordered_paths, start=1):
-            if on_file_start is not None:
-                on_file_start(path, index, len(ordered_paths))
-            reports.append(review_one(str(path)))
-    else:
+    total = len(ordered_paths)
+
+    def _run_one(index_path: tuple[int, Path]) -> dict[str, Any]:
+        index, path = index_path
         if on_file_start is not None:
-            for index, path in enumerate(ordered_paths, start=1):
-                on_file_start(path, index, len(ordered_paths))
+            on_file_start(path, index, total)
+        report = review_one(str(path))
+        if on_file_done is not None:
+            on_file_done(path, report)
+        return report
+
+    indexed = list(enumerate(ordered_paths, start=1))
+    if workers == 1:
+        reports = [_run_one(item) for item in indexed]
+    else:
         with ThreadPoolExecutor(
             max_workers=min(workers, len(ordered_paths) or 1),
             thread_name_prefix="secondpass-file",
         ) as executor:
-            # executor.map returns in input order even when reviews finish out of order.
-            reports = list(
-                executor.map(lambda path: review_one(str(path)), ordered_paths)
-            )
+            # map preserves input order in the returned list.
+            reports = list(executor.map(_run_one, indexed))
 
     files: list[dict[str, Any]] = []
     total_accepted = 0
