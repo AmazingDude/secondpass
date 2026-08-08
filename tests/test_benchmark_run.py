@@ -210,6 +210,138 @@ def test_run_benchmark_offline_writes_results(tmp_path: Path, monkeypatch) -> No
     assert len(written) == 1
 
 
+def test_run_benchmark_excludes_inconclusive_fixture_from_false_negatives(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A rate-limited / errored LLM call must not be scored as a miss.
+
+    ground_truth expects path_traversal on path_traversal.py. If review_code
+    comes back inconclusive (zero predictions, report["inconclusive"]=True),
+    that fixture must be excluded from the denominator entirely — not
+    silently counted as a false negative — and must show up in the
+    inconclusive/excluded bookkeeping instead.
+    """
+    results_dir = tmp_path / "results"
+
+    def fake_live(fixture_abs: Path) -> dict:
+        name = fixture_abs.name
+        if name == "path_traversal.py":
+            return {
+                "path": str(fixture_abs),
+                "accepted": [],
+                "needs_review": [],
+                "static_scan_error": None,
+                "used_logic_fallback": True,
+                "inconclusive": True,
+                "message": "inconclusive — rate limited",
+            }
+        # Every other fixture in ground_truth.json: no findings either, but
+        # a *conclusive* zero — a genuine miss for anything with expected
+        # issues, which is fine, since this test only asserts on the
+        # inconclusive fixture's treatment.
+        return {
+            "path": str(fixture_abs),
+            "accepted": [],
+            "needs_review": [],
+            "static_scan_error": None,
+            "used_logic_fallback": False,
+            "inconclusive": False,
+            "message": "clean",
+        }
+
+    monkeypatch.setattr("app.benchmark_run._live_review", fake_live)
+
+    payload = run_benchmark(
+        offline=False,
+        results_dir=results_dir,
+        label="unit-inconclusive",
+    )
+
+    score = payload["score"]
+    assert payload["inconclusive_fixtures"] == [
+        "benchmark/fixtures/path_traversal.py"
+    ]
+    assert payload["scoring_note"] == (
+        "1 fixture(s) inconclusive — excluded from scored recall"
+    )
+    # path_traversal must NOT be one of the false negatives: only the other
+    # three real-issue fixtures (notes_idor, ops_shell, hardcoded_secret)
+    # are scored as misses.
+    assert score["false_negatives"] == 3
+    assert score["true_positives"] == 0
+    assert score["false_positives"] == 0
+
+    note = next(
+        row
+        for row in payload["per_file"]
+        if row["file_path"] == "benchmark/fixtures/path_traversal.py"
+    )
+    assert note["inconclusive"] is True
+    assert note["coverage_status"] == "inconclusive"
+    assert note["predicted_finding_types"] == []
+
+
+def test_run_benchmark_inconclusive_fixture_with_a_prediction_is_not_scored_as_fp(
+    tmp_path: Path, monkeypatch
+) -> None:
+    """A fixture can be inconclusive (LLM leg rate-limited) yet still carry a
+    prediction from an earlier stage (e.g. a Semgrep static hit before the
+    logic-review call failed). That prediction must be dropped from scoring
+    entirely, not counted as a false positive just because its GT entry was
+    excluded as inconclusive.
+    """
+    results_dir = tmp_path / "results"
+
+    def fake_live(fixture_abs: Path) -> dict:
+        name = fixture_abs.name
+        if name == "ops_shell.py":
+            return {
+                "path": str(fixture_abs),
+                "accepted": [
+                    {
+                        "structured_finding": {
+                            "finding_type": (
+                                "python.lang.security.audit.subprocess-shell-true"
+                                ".subprocess-shell-true"
+                            )
+                        }
+                    }
+                ],
+                "needs_review": [],
+                "static_scan_error": None,
+                "used_logic_fallback": True,
+                "inconclusive": True,
+                "message": "inconclusive — rate limited",
+            }
+        return {
+            "path": str(fixture_abs),
+            "accepted": [],
+            "needs_review": [],
+            "static_scan_error": None,
+            "used_logic_fallback": False,
+            "inconclusive": False,
+            "message": "clean",
+        }
+
+    monkeypatch.setattr("app.benchmark_run._live_review", fake_live)
+
+    payload = run_benchmark(
+        offline=False,
+        results_dir=results_dir,
+        label="unit-inconclusive-fp",
+    )
+
+    score = payload["score"]
+    assert payload["inconclusive_fixtures"] == ["benchmark/fixtures/ops_shell.py"]
+    # The command_injection prediction on ops_shell must not surface as a
+    # false positive just because its GT entry was excluded.
+    assert score["false_positives"] == 0
+    assert score["true_positives"] == 0
+    # notes_idor / hardcoded_secret / path_traversal each expect one finding
+    # that this fake review never produces → genuine misses.
+    assert score["false_negatives"] == 3
+
+
 def test_mapped_predictions_score_against_real_ground_truth() -> None:
     """Scope to the two original fixtures — full ground truth now covers more
     fixtures (hardcoded_secret, path_traversal) added for Security's

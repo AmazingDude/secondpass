@@ -14,7 +14,7 @@ from app.context import (
     resolved_project_modules,
 )
 from app.hooks import agent_scope, log_agent_event
-from app.llm import chat
+from app.llm import LLMRateLimitedError, chat
 from app.schema import Finding as StructuredFinding
 from app.workers.common import extract_json_object
 
@@ -545,6 +545,7 @@ def run_architecture_worker(
             "context_files": [],
             "failures": 0,
             "claim_unverified": False,
+            "inconclusive": False,
         }
 
     context_files = gather_cross_file_context(
@@ -576,18 +577,31 @@ def run_architecture_worker(
                 tools=None,
                 temperature=0,
             )
-        except Exception as exc:  # noqa: BLE001
+        except LLMRateLimitedError:
             failures += 1
-            log_agent_event(f"architecture_worker failed ({exc}); treating as clean")
+            log_agent_event("architecture_worker inconclusive — rate limited")
             return {
                 "has_issues": False,
-                "summary": (
-                    "Architecture review could not complete; no concrete issue confirmed."
-                ),
+                "summary": "inconclusive — rate limited",
                 "structured_findings": [],
                 "context_files": context_summary,
                 "failures": failures,
                 "claim_unverified": False,
+                "inconclusive": True,
+            }
+        except Exception as exc:  # noqa: BLE001
+            failures += 1
+            log_agent_event(
+                f"architecture_worker failed ({exc}); marking inconclusive"
+            )
+            return {
+                "has_issues": False,
+                "summary": "inconclusive — architecture review could not complete",
+                "structured_findings": [],
+                "context_files": context_summary,
+                "failures": failures,
+                "claim_unverified": False,
+                "inconclusive": True,
             }
 
         content = response.choices[0].message.content or ""
@@ -638,4 +652,5 @@ def run_architecture_worker(
             "context_files": context_summary,
             "failures": failures,
             "claim_unverified": claim_unverified,
+            "inconclusive": False,
         }

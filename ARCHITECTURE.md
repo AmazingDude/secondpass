@@ -151,4 +151,4 @@ No separate “dashboard backend.” CORS only; same Supervisor, same DB.
 5. **Two memory stores** — Chroma retrieves seed + human-accepted lessons; SQLite records every human decision (rejects never enter Chroma).
 6. **Measured** — point to `benchmark/REPORT.md` (Security 1.0/1.0; Architecture Groq 1.0/1.0; OpenAI label split called out honestly).
 
-Skip stretches (webhook, Bandit, auto-memory) unless asked.
+Skip remaining stretches (webhook, Bandit) unless asked. Human-gated Chroma promote from ACCEPT is already live.

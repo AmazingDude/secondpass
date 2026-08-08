@@ -273,6 +273,19 @@ def run_benchmark(
         )
         all_predictions.extend(predictions)
 
+        # A rate-limited / errored LLM call can make review_code report zero
+        # findings even when the fixture genuinely has a planted issue. That
+        # is "we never got a real answer", not "the model looked and found
+        # nothing" — it must not be scored as a false negative. review_code
+        # already flags this via report["inconclusive"] (mirrored on the
+        # inner ReviewResult.coverage_status); persist both here so the
+        # fixture can be excluded from this run's precision/recall
+        # denominator instead of silently inflating false_negatives.
+        inconclusive = bool(report.get("inconclusive"))
+        coverage_status = (report.get("review_result") or {}).get(
+            "coverage_status"
+        ) or ("inconclusive" if inconclusive else "ok")
+
         expected = [
             issue["finding_type"]
             for issue in (ground_truth.get("fixtures") or {}).get(fixture_key, [])
@@ -288,6 +301,8 @@ def run_benchmark(
             "scored_bucket": (
                 "accepted+needs_review" if include_needs_review else "accepted"
             ),
+            "inconclusive": inconclusive,
+            "coverage_status": coverage_status,
             "expected_finding_types": expected,
             "predicted_finding_types": predicted_types,
             "accepted_raw_types": [
@@ -309,11 +324,31 @@ def run_benchmark(
         per_file.append(note)
         print(
             f"  accepted={len(accepted)} needs_review={len(needs_review)} "
-            f"predicted={predicted_types} expected={expected}",
+            f"predicted={predicted_types} expected={expected}"
+            + (f" [INCONCLUSIVE: {report.get('message')}]" if inconclusive else ""),
             flush=True,
         )
 
-    score: ScoreReport = evaluate(all_predictions, ground_truth)
+    inconclusive_fixtures = [
+        row["file_path"] for row in per_file if row.get("inconclusive")
+    ]
+    scored_ground_truth = ground_truth
+    scored_predictions = all_predictions
+    if inconclusive_fixtures:
+        excluded = set(inconclusive_fixtures)
+        scored_fixtures = dict(ground_truth.get("fixtures") or {})
+        for key in inconclusive_fixtures:
+            scored_fixtures.pop(key, None)
+        scored_ground_truth = {**ground_truth, "fixtures": scored_fixtures}
+        # A prediction that did land on an inconclusive fixture (e.g. a
+        # semgrep-only hit before the LLM leg rate-limited) must also be
+        # dropped from scoring — otherwise, with its GT entry removed above,
+        # it would flip from "excluded" to a spurious false positive.
+        scored_predictions = [
+            item for item in all_predictions if item.file_path not in excluded
+        ]
+
+    score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
     out_dir = results_dir or _RESULTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
@@ -334,11 +369,23 @@ def run_benchmark(
         "provider": os.getenv("LLM_PROVIDER", "groq") if not offline else None,
         "model": (os.getenv("LLM_MODEL") or None) if not offline else None,
         "score": score.model_dump(),
+        "inconclusive_fixtures": inconclusive_fixtures,
+        "scoring_note": (
+            f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
+            "excluded from scored recall"
+            if inconclusive_fixtures
+            else None
+        ),
         "predictions": [item.model_dump() for item in all_predictions],
         "per_file": per_file,
     }
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"\nScoreReport: {score.model_dump()}")
+    if inconclusive_fixtures:
+        print(
+            f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
+            f"excluded from scored recall: {inconclusive_fixtures}"
+        )
     try:
         display = out_path.relative_to(_REPO_ROOT).as_posix()
     except ValueError:

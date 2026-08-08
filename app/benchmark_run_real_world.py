@@ -142,6 +142,13 @@ def run_benchmark(
         predictions = predictions_from_report_items(scored_items, fixture_path=fixture_key)
         all_predictions.extend(predictions)
 
+        # Same conflation as the main Security suite (app/benchmark_run.py):
+        # a rate-limited/errored review already sets report["inconclusive"]
+        # (persisted below) but was still being scored against the full
+        # ground truth, silently inflating false_negatives. Exclude these
+        # fixtures from this run's denominator instead.
+        inconclusive = bool(report.get("inconclusive"))
+
         expected = [
             issue["finding_type"]
             for issue in (ground_truth.get("fixtures") or {}).get(fixture_key, [])
@@ -153,7 +160,11 @@ def run_benchmark(
             "static_scan_error": report.get("static_scan_error"),
             "used_logic_fallback": report.get("used_logic_fallback"),
             "used_logic_review": report.get("used_logic_review"),
-            "inconclusive": report.get("inconclusive"),
+            "inconclusive": inconclusive,
+            "coverage_status": (report.get("review_result") or {}).get(
+                "coverage_status"
+            )
+            or ("inconclusive" if inconclusive else "ok"),
             "accepted_count": len(accepted),
             "needs_review_count": len(needs_review),
             "scored_bucket": "accepted+needs_review" if include_needs_review else "accepted",
@@ -177,11 +188,27 @@ def run_benchmark(
         per_file.append(note)
         print(
             f"  accepted={len(accepted)} needs_review={len(needs_review)} "
-            f"predicted={predicted_types} expected={expected}",
+            f"predicted={predicted_types} expected={expected}"
+            + (f" [INCONCLUSIVE: {report.get('message')}]" if inconclusive else ""),
             flush=True,
         )
 
-    score: ScoreReport = evaluate(all_predictions, ground_truth)
+    inconclusive_fixtures = [
+        row["file_path"] for row in per_file if row.get("inconclusive")
+    ]
+    scored_ground_truth = ground_truth
+    scored_predictions = all_predictions
+    if inconclusive_fixtures:
+        excluded = set(inconclusive_fixtures)
+        scored_fixtures = dict(ground_truth.get("fixtures") or {})
+        for key in inconclusive_fixtures:
+            scored_fixtures.pop(key, None)
+        scored_ground_truth = {**ground_truth, "fixtures": scored_fixtures}
+        scored_predictions = [
+            item for item in all_predictions if item.file_path not in excluded
+        ]
+
+    score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
     _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
     out_path = _RESULTS_DIR / f"{label}_{stamp}.json"
@@ -199,11 +226,23 @@ def run_benchmark(
         "provider": os.getenv("LLM_PROVIDER", "groq") if not offline else None,
         "model": (os.getenv("LLM_MODEL") or None) if not offline else None,
         "score": score.model_dump(),
+        "inconclusive_fixtures": inconclusive_fixtures,
+        "scoring_note": (
+            f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
+            "excluded from scored recall"
+            if inconclusive_fixtures
+            else None
+        ),
         "predictions": [item.model_dump() for item in all_predictions],
         "per_file": per_file,
     }
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
     print(f"\nScoreReport: {score.model_dump()}")
+    if inconclusive_fixtures:
+        print(
+            f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
+            f"excluded from scored recall: {inconclusive_fixtures}"
+        )
     try:
         display = out_path.relative_to(_REPO_ROOT).as_posix()
     except ValueError:

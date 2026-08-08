@@ -817,6 +817,7 @@ def build_architecture_review_output(
     *,
     timestamp: datetime | None = None,
     claim_unverified: bool = False,
+    inconclusive: bool = False,
 ) -> tuple[ReviewResult, GateResult]:
     """Wrap Architecture Worker findings into a schema-valid ReviewResult + gate."""
     review_result = ReviewResult(
@@ -825,6 +826,7 @@ def build_architecture_review_output(
         timestamp=timestamp or datetime.now(timezone.utc),
         worker_name="architecture",
         claim_status="unverified" if claim_unverified else None,
+        coverage_status="inconclusive" if inconclusive else "ok",
     )
     try:
         from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
@@ -900,6 +902,7 @@ def review_architecture(
     assessment = run_architecture_worker(target, project_root=project_root)
     failures = int(assessment.get("failures") or 0)
     claim_unverified = bool(assessment.get("claim_unverified"))
+    inconclusive = bool(assessment.get("inconclusive"))
     structured_findings: list[StructuredFinding] = list(
         assessment.get("structured_findings") or []
     )
@@ -908,6 +911,7 @@ def review_architecture(
         target,
         structured_findings,
         claim_unverified=claim_unverified,
+        inconclusive=inconclusive,
     )
     items = [
         _architecture_report_item(finding, assessment) for finding in structured_findings
@@ -925,8 +929,11 @@ def review_architecture(
         "path": target,
         "worker_name": "architecture",
         "finding_count": len(structured_findings),
-        "no_issues": len(structured_findings) == 0 and not claim_unverified,
+        "no_issues": len(structured_findings) == 0
+        and not claim_unverified
+        and not inconclusive,
         "claim_unverified": claim_unverified,
+        "inconclusive": inconclusive,
         "message": assessment.get("summary") if not structured_findings else None,
         "context_files": assessment.get("context_files") or [],
         "tool_call_failures": failures,

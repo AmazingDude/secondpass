@@ -29,29 +29,28 @@ Scoring convention (unchanged across the project): **accepted** findings only (c
 | **Architecture own-suite (Groq)** | 2 | 0 | 0 | **1.0** | **1.0** | `checkout_handler` → `layering_violation`; `low_level_persistence_client` → `dependency_direction`; clean control empty. Matches §31/§32 Groq record. |
 | **Cross-worker (live, Groq)** | — | — | — | status **ok** | — | Security: 0 accepted / 0 needs_review on all 6 Architecture fixtures. Architecture: 0 accepted / 0 needs_review on all 5 Security fixtures (including `hardcoded_secret.py`, which had residual non-authz Architecture noise on the 2026-08-02 OpenAI cross-worker run). |
 
-### Real-world Security mini-suite (OpenAI)
+### Real-world Security mini-suite — OpenAI vs Groq A/B
 
 Separate suite (`benchmark/real_world/`, `ground_truth_real_world.json`) — **not** folded into the planted Security ground truth. Four provenance-backed vulnerable cases + four fixed/clean counterparts (see `manifest.json`).
 
-| Metric | Value |
-| --- | --- |
-| True positives | **4** |
-| False positives | **0** |
-| False negatives | **0** |
-| Precision | **1.0** |
-| Recall | **1.0** |
+| Provider | Model (default) | Date | TP | FP | FN | Precision | Recall | Results file |
+| --- | --- | --- | ---: | ---: | ---: | ---: | ---: | --- |
+| **openai** | gpt-4o-mini | 2026-08-04 / confbucket 2026-08-08 | 4 | 0 | 0 | **1.0** | **1.0** | `confbucket_realworld_20260808.json` (also `real_world_final_20260804_…`) |
+| **groq** | llama-3.3-70b-versatile | 2026-08-08 A/B | 4 | 0 | 0 | **1.0** | **1.0** | `ab_realworld_groq_20260808.json` |
 
-| Vulnerable file | Predicted | Expected |
-| --- | --- | --- |
-| `aiohttp_static_traversal_vulnerable.py` | `path_traversal` | `path_traversal` (CVE-2024-23334) |
-| `gitpython_clone_command_injection_vulnerable.py` | `command_injection` | `command_injection` (CVE-2022-24439) |
-| `django_idor_notes_vulnerable.py` | `missing_ownership_check` | `missing_ownership_check` (teaching / CWE-639) |
-| `labelstudio_hardcoded_secret_vulnerable.py` | `hardcoded_secret` | `hardcoded_secret` (CVE-2023-43791) |
-| 4 fixed/clean counterparts | (none) | (none) |
+| Vulnerable file | OpenAI predicted | Groq predicted | Expected |
+| --- | --- | --- | --- |
+| `aiohttp_static_traversal_vulnerable.py` | `path_traversal` | `path_traversal` | `path_traversal` (CVE-2024-23334) |
+| `gitpython_clone_command_injection_vulnerable.py` | `command_injection` | `command_injection` | `command_injection` (CVE-2022-24439) |
+| `django_idor_notes_vulnerable.py` | `missing_ownership_check` | `missing_ownership_check` | `missing_ownership_check` (teaching / CWE-639) |
+| `labelstudio_hardcoded_secret_vulnerable.py` | `hardcoded_secret` | `hardcoded_secret` | `hardcoded_secret` (CVE-2023-43791) |
+| 4 fixed/clean counterparts | (none) | (none) | (none) |
 
-**How to read this number:** N=4 is evidence that the Security path can generalize past secondpass’s own planted fixtures on these four documented, single-file cases under OpenAI — **not** a calibrated accuracy claim, and **not** evidence of reliability on arbitrary open-source repositories. Offline/Semgrep-only on the same suite scored **0/4 recall** (first measurement, `prompts.md` §41); default static rules catch none of these four shapes. Logic-review carries all of the real-world recall here.
+Temp=0 confirmed on the Groq A/B live logs. Do **not** merge these into one unlabeled P/R — both providers hit 1.0/1.0 on N=4 independently.
 
-**Plain reading:** Planted Security and Architecture (Groq) both match their best recorded scores. Cross-worker is clean on both directions under Groq. Real-world OpenAI measurement repeats the §41 1.0/1.0 on N=4 without retuning. Earlier OpenAI Architecture label drift on `low_level_persistence_client` (2026-08-02 A/B) remains a known provider gap if OpenAI is the deploy provider for Architecture — this refresh did not re-run Architecture on OpenAI.
+**How to read this number:** N=4 is evidence that the Security path can generalize past secondpass’s own planted fixtures on these four documented, single-file cases under **both** OpenAI and Groq — **not** a calibrated accuracy claim, and **not** evidence of reliability on arbitrary open-source repositories. Offline/Semgrep-only on the same suite scored **0/4 recall** (first measurement, `prompts.md` §41); default static rules catch none of these four shapes. Logic-review carries all of the real-world recall here.
+
+**Plain reading:** Planted Security and Architecture (Groq) both match their best recorded scores when runs complete without rate limits. Cross-worker is clean on both directions under Groq. Real-world OpenAI and Groq A/B both measure **1.0/1.0** on N=4 without retuning. Earlier OpenAI Architecture label/evidence gaps remain a known provider issue (see §5 Architecture OpenAI A/B below).
 
 ---
 
@@ -152,42 +151,94 @@ This was **not** evidence that §33’s insufficient-structure filter broke Arch
 
 **Scope guardrail:** this section changes what gets *persisted and read*, not
 what gets *detected*. `app/benchmark_run.py`, `app/benchmark_run_architecture.py`,
-and `app/benchmark_run_real_world.py` now write each individual finding's
+and `app/benchmark_run_real_world.py` write each individual finding's
 `confidence` (and `detection_method`) into the results JSON — both as a field
-on `predictions[]` (the same records already used for the official
-TP/FP/precision/recall score) and as a fuller, non-deduplicated
+on `predictions[]` and as a fuller, non-deduplicated
 `per_file[*].confidence_records` list that also includes sub-gate
 `needs_review` findings. The confidence gate threshold, `Finding` schema,
-detection prompts, and Architecture filters were not touched. A new
-read-only tool, `app/benchmark_confidence_buckets.py`, buckets those
-persisted findings by confidence range and computes precision (hit rate
-against ground truth) within each bucket.
+detection prompts, and Architecture filters were not touched.
+`app/benchmark_confidence_buckets.py` buckets those persisted findings and
+computes precision (hit rate against ground truth) within each bucket.
 
-**Provider labeling (do not mix rows across providers without labeling —
-per the already-documented Groq vs OpenAI Architecture label-drift gap in
-§4 above):** the table below labels every row with the provider that
-produced it. Security and the real-world mini-suite ran under the repo's
-current default (`LLM_PROVIDER=openai`). Architecture ran under **Groq**,
-not OpenAI — because on this same day, under OpenAI, Architecture claimed
-both planted issues (`layering_violation` on `checkout_handler.py`,
-`dependency_direction` on `low_level_persistence_client.py`) but every claim
-was dropped by the evidence-bar filter before reaching `accepted`/
-`needs_review` (`claim_status="unverified"`), which produced **zero**
-confidence-bucket data points for Architecture (0 TP / 0 FP / 2 FN,
-recall 0.0). That is not a bug introduced by this change — it is a live
-reproduction of the OpenAI Architecture label/evidence gap already recorded
-in §4 ("Architecture label split can be provider-dependent"). Re-running
-Architecture under Groq (a provider choice, not a filter or prompt change)
-reproduced the existing Groq baseline (2 TP / 0 FP, precision 1.0, recall
-1.0) and is what feeds the table below. The empty OpenAI-Architecture run is
-kept on disk (`benchmark/results/confbucket_architecture_20260808.json`) as
-evidence of the gap, not cited as an Architecture number.
+**Provider labeling (do not mix rows across providers without labeling):**
+every row below names the provider that produced it. OpenAI Security and
+OpenAI real-world bucket rows from earlier on 2026-08-08 are **kept**; Groq
+Security and Groq real-world rows were added the same day for internal
+consistency with the §1 Groq Security / real-world P/R headlines. Architecture
+keeps the existing Groq bucket rows and adds an OpenAI A/B pass beside them.
 
-| Suite | Provider | Results file |
-| --- | --- | --- |
-| Security (planted) | openai | `benchmark/results/confbucket_security_20260808.json` |
-| Architecture (planted) | **groq** (see above) | `benchmark/results/confbucket_architecture_groq_20260808.json` |
-| Real-world Security mini-suite | openai | `benchmark/results/confbucket_realworld_20260808.json` |
+| Suite | Provider | Results file | Suite P/R (accepted-only) |
+| --- | --- | --- | --- |
+| Security (planted) | openai | `confbucket_security_20260808.json` | 1.0 / 1.0 |
+| Security (planted) | **groq** | `ab_security_groq_clean_20260809.json` | **1.0 / 1.0** (clean run; old 0.75 artifact kept — see note) |
+| Architecture (planted) | groq | `confbucket_architecture_groq_20260808.json` | 1.0 / 1.0 |
+| Architecture (planted) | **openai** | `ab_architecture_openai_20260808.json` | 1.0 / **0.5** (see note) |
+| Real-world Security | openai | `confbucket_realworld_20260808.json` | 1.0 / 1.0 |
+| Real-world Security | **groq** | `ab_realworld_groq_20260808.json` | 1.0 / 1.0 |
+
+**Groq planted-Security — clean run (2026-08-09):** after a new Groq API
+key, `--label ab_security_groq_clean` completed with **0 inconclusive
+fixtures**, temp=0 confirmed in live logs. Score: **4 TP / 0 FP / 0 FN →
+P=1.0 / R=1.0**. Predictions: `hardcoded_secret` @100 (`llm_reasoning`),
+`missing_ownership_check` @100 (`llm_reasoning`), `command_injection` @90
+(`static_rule`), `path_traversal` @100 (`llm_reasoning`). Artifact:
+`ab_security_groq_clean_20260809.json`. Independent reconfirm the same night
+(`ab_security_groq_clean2_20260809.json`) also **1.0 / 1.0**, 0 inconclusive.
+OpenAI Security buckets are **not** retracted.
+
+**Why the earlier 0.75 was a coverage artifact (kept on disk):**
+`ab_security_groq_20260808.json` scored recall 0.75 because
+`path_traversal.py` was rate-limited mid logic-review (`inconclusive —
+rate limited`) and the old scorer treated empty predictions + expected GT
+as a normal FN. Under the fixed scorer that same incomplete run would have
+been reported as 1 excluded/inconclusive fixture on a 3-fixture-scored
+denominator, not a real miss. Do not cite the archived 0.75 as model
+recall.
+
+**Correctness fix (coverage vs. false negative):** the benchmark scorer
+previously had no way to tell "the model looked and found nothing" apart
+from "the review never completed" — both showed up as zero predictions and
+were scored as a plain false negative. `app/benchmark_run.py` (and, on the
+same pattern, `app/benchmark_run_architecture.py` and
+`app/benchmark_run_real_world.py`) now persist `per_file[*].inconclusive` /
+`coverage_status` from the worker's own coverage signal, and **exclude**
+inconclusive fixtures — both their ground-truth entry and any partial
+prediction they produced (e.g. a `static_rule` hit before the LLM leg
+rate-limited) — from that run's precision/recall denominator entirely. The
+run is reported instead as e.g. "N fixture(s) inconclusive — excluded from
+scored recall." Earlier same-day clean re-attempts (before the new key)
+hit sustained rate limits and demonstrated the fix reporting zero coverage
+rather than silently scoring 0.0 recall; those failed attempts are
+superseded by the clean 2026-08-09 artifact above.
+
+**Same conflation checked in the other two runners:** `app/benchmark_run_real_world.py`
+already persisted `per_file[*].inconclusive` from `review_code` but, like
+Security before this fix, still scored inconclusive fixtures against the
+full ground truth (same silent-FN bug) — fixed with the identical
+exclude-from-denominator pattern above; no real-world rate limit was hit in
+the Groq/OpenAI runs on record, so this fix does not change any published
+real-world number. `app/benchmark_run_architecture.py` had a **worse**
+version of the same gap: `review_architecture` had no `inconclusive`
+concept at all — `app/workers/architecture_worker.py`'s catch-all handler
+for a failed/rate-limited LLM call returned `claim_unverified=False` with a
+"could not complete" summary that was indistinguishable from an honest
+clean result. Fixed on the same pattern as Security's logic-review: the
+worker now catches `LLMRateLimitedError` separately, sets
+`inconclusive=True` (mirrored on `coverage_status`) on both that and the
+generic-failure path, and `benchmark_run_architecture.py` excludes those
+fixtures from scoring the same way. No published Architecture run in this
+report hit that path, so no existing Architecture number changes — this is
+a latent-bug fix, not a re-score.
+
+**OpenAI planted-Architecture note:** `checkout_handler.py` →
+`claim_unverified` (LLM claimed layering; evidence bar dropped all rows) →
+FN for `layering_violation`. `low_level_persistence_client.py` → accepted
+`dependency_direction` @90 → TP. Clean control empty. Suite score
+**P=1.0 / R=0.5**. One confidence-bucket data point (N=1), not an empty
+table — still too small to read as a rate. Earlier same-day empty OpenAI
+Architecture payload (`confbucket_architecture_20260808.json`) remains on
+disk as prior evidence of the gap; this A/B file is the labeled OpenAI row
+in the table below.
 
 ### Confidence-bucket table (real numbers, computed 2026-08-08)
 
@@ -196,56 +247,266 @@ evidence of the gap, not cited as an Architecture number.
 | security | openai | <70 | 0 / 0 | n/a | no data in this bucket |
 | security | openai | 70-79 | 0 / 0 | n/a | no data in this bucket |
 | security | openai | 80-89 | 0 / 0 | n/a | no data in this bucket |
-| security | openai | 90-100 | 5 / 5 | 1.00 | N=5 |
+| security | openai | 90-100 | 5 / 5 | 1.00 | N=5 — small |
+| security | groq | <70 | 0 / 0 | n/a | no data in this bucket |
+| security | groq | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| security | groq | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| security | groq | 90-100 | 4 / 4 | 1.00 | N=4 — small; clean run (`ab_security_groq_clean_20260809.json`) |
 | architecture | groq | <70 | 0 / 0 | n/a | no data in this bucket |
 | architecture | groq | 70-79 | 0 / 0 | n/a | no data in this bucket |
 | architecture | groq | 80-89 | 0 / 0 | n/a | no data in this bucket |
 | architecture | groq | 90-100 | 2 / 2 | 1.00 | **N=2 — too small to read as a rate** |
+| architecture | openai | <70 | 0 / 0 | n/a | no data in this bucket |
+| architecture | openai | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| architecture | openai | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| architecture | openai | 90-100 | 1 / 1 | 1.00 | **N=1 — too small to read as a rate**; checkout_handler claim_unverified (no confidence) |
 | real_world | openai | <70 | 0 / 0 | n/a | no data in this bucket |
 | real_world | openai | 70-79 | 0 / 0 | n/a | no data in this bucket |
 | real_world | openai | 80-89 | 0 / 0 | n/a | no data in this bucket |
-| real_world | openai | 90-100 | 4 / 4 | 1.00 | N=4 |
+| real_world | openai | 90-100 | 4 / 4 | 1.00 | N=4 — small |
+| real_world | groq | <70 | 0 / 0 | n/a | no data in this bucket |
+| real_world | groq | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| real_world | groq | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| real_world | groq | 90-100 | 4 / 4 | 1.00 | N=4 — small; confidences were 100 (still 90-100 bucket) |
 
 Reproduce with:
 
 ```bash
 python -m app.benchmark_confidence_buckets --markdown \
   "security:benchmark/results/confbucket_security_20260808.json" \
-  "architecture:benchmark/results/confbucket_architecture_groq_20260808.json" \
-  "real_world:benchmark/results/confbucket_realworld_20260808.json"
+  "security_groq:benchmark/results/ab_security_groq_clean_20260809.json" \
+  "architecture_groq:benchmark/results/confbucket_architecture_groq_20260808.json" \
+  "architecture_openai:benchmark/results/ab_architecture_openai_20260808.json" \
+  "real_world:benchmark/results/confbucket_realworld_20260808.json" \
+  "real_world_groq:benchmark/results/ab_realworld_groq_20260808.json"
 ```
 
 **Small-sample honesty (stated plainly, not just implied by the table):**
-Every finding that reached `accepted` or `needs_review` in these three runs
-happened to carry **confidence 90**, so the `<70`, `70-79`, and `80-89`
-buckets are empty (n=0) for all three suites in this measurement — not
-because low-confidence findings are impossible, but because this run's
-planted suites are small (4–7 fixtures each) and every hit/miss the model
-made this time landed at the same round confidence value. The one non-empty
-bucket per suite has **N=2 to N=5** data points. A precision of 1.00 from
-N=2 (Architecture, 90-100 bucket) is **not a statistically meaningful
-rate** — it means "both of the two findings we had were correct," not "this
-model is 100% precise at 90%+ confidence." Treat every number in this table
-as a description of these specific runs, not a calibration claim, and
-re-run before citing it anywhere the sample size matters.
+Every non-empty bucket in these runs has **N≤5**. A precision of 1.00 from
+N=1–N=5 is a description of these specific accepted/needs_review rows, **not**
+a statistically meaningful calibration rate. Lower buckets (`<70`, `70-79`,
+`80-89`) stayed empty on these planted/real-world passes (findings clustered
+at 90 or 100). Treat every number as provider-labeled and run-specific.
 
 **`detection_method` as a second, complementary trust signal.** Confidence
 is a per-finding number from one source (a static rule's fixed default, or
 the LLM's self-reported confidence). `detection_method` (`static_rule` vs
-`llm_reasoning`) is orthogonal and often more informative: on
-`ops_shell.py`, the same `command_injection` bug was independently flagged
-by both a Semgrep static rule and LLM logic-review, each at confidence 90.
-Two independent detection methods agreeing is a stronger trust signal than
-either one's self-reported confidence alone. Findings backed only by
-`llm_reasoning` (the majority in this planted suite, since most bug classes
-here — IDOR, secrets, path traversal, layering, dependency-direction — have
-no matching static rule) should be read as carrying that single-source
-caveat; `static_rule` + `llm_reasoning` agreement should be read as
-corroborated.
+`llm_reasoning`) is orthogonal: e.g. Groq planted Security on `ops_shell.py`
+accepted `command_injection` via `static_rule` @90 only in this A/B (no
+second llm_reasoning row this pass). Two independent methods agreeing is a
+stronger trust signal than either alone when both appear.
+
+### What this means for slides (max 5)
+
+- Real-world CVE mini-suite: **OpenAI and Groq both 1.0/1.0 on N=4** — cite side-by-side, do not merge.
+- Planted Security: **OpenAI and Groq both 1.0/1.0** on clean runs; the earlier Groq 0.75 was a rate-limit coverage artifact (kept on disk), and the scorer now excludes inconclusive fixtures from recall instead of silently counting them as misses.
+- Architecture: **Groq** still the measured full accept path (2/2); **OpenAI** A/B got 1 TP (`dependency_direction`) + 1 claim_unverified FN on layering — provider gap, not “no Architecture.”
+- Confidence still clusters high (90–100); lower buckets empty on these suites — method exists; cross-bucket discrimination not shown here.
+- Every bucket N≤5: say “track record on these runs,” not “calibrated confidence.”
 
 ---
 
-## 6. Files touched in this documentation step
+## 6. Qualitative OSS confidence re-measurement (2026-08-08)
+
+**This is not a scored benchmark.** The 10 files below are real OSS source
+(werkzeug, Django, requests, itsdangerous, tqdm, tornado, python-dotenv,
+humanize) with **no exhaustive formal ground truth** — they were picked for
+prior qualitative smoke testing (`prompts.md` §§37–39), not as labeled
+fixtures. This section reports what one full pass produced: confidence
+distribution, accepted/needs_review split, `detection_method` mix, and
+whether the old Architecture false-positive shape recurred. It does **not**
+compute or claim precision, recall, accuracy, or calibration for this
+cohort — a "previously plausibly clean" judgment is not the same thing as a
+verified ground-truth label, and a new finding here could be a real issue
+that simply wasn't looked for before.
+
+**Cohort:** 10 files across 8 projects (werkzeug ×2, Django ×2, requests,
+itsdangerous, tqdm, tornado, python-dotenv, humanize) — the same files
+already reviewed in `smoke_test_external/` and `smoke_test_security/`.
+
+**Provider/model/run date:** `LLM_PROVIDER=openai`, default model
+`gpt-4o-mini` (`LLM_MODEL` unset), temperature 0 — confirmed live from the
+run's own agent-event log: every one of the 20 file/worker runs logged
+`llm temperature: using 0.0 (requested 0.0)`. Run date **2026-08-08**.
+OpenAI was chosen (over Groq, the default for other suites in this report)
+because the one prior isolated OSS batch that explicitly logged its
+provider (`smoke_test_security/out_*.txt`, "Provider: openai") used OpenAI;
+the very first (`smoke_test_external/`) batch's provider was never logged
+and is not guessed here.
+
+**Tool:** `app/benchmark_qualitative_oss.py` (new, separate from the scored
+benchmark runners — it does not read or write any ground-truth file). One
+run per file/worker, Security and Architecture run separately, no reruns.
+Raw payload: `benchmark/results/qualitative_oss_20260808.json` (gitignored).
+
+**Run counts:**
+
+| Metric | Count |
+| --- | ---: |
+| File/worker runs | **20** (10 files × 2 workers) |
+| Completed | **20** |
+| Inconclusive (rate limit / logic-review failure) | **0** |
+| Error | **0** |
+
+No file was skipped, rate-limited, or silently omitted.
+
+### Confidence-bucket occupancy by worker
+
+| Worker | <70 | 70-79 | 80-89 | 90-100 |
+| --- | ---: | ---: | ---: | ---: |
+| security | 0 | 0 | 0 | 0 |
+| architecture | 0 | **3** | 0 | 0 |
+
+Security produced **zero** findings of any confidence on all 10 files
+(every file was a Security zero-finding outcome — see below). Architecture
+produced exactly three findings with a confidence value, **all at 79%**,
+all `needs_review` (gate threshold is 80) — a genuinely different bucket
+than the confidence-bucket run in §5 above (which saw everything land at
+90). Read this as "this cohort naturally produced some sub-gate confidence
+variety," not as a calibration result — N=3 in one bucket is still too
+small to say anything about precision at 70-79.
+
+### Accepted vs needs_review vs claim-unverified vs zero-finding
+
+| Outcome | Count | Notes |
+| --- | ---: | --- |
+| Accepted findings (any worker) | **0** | No file crossed the ≥80 gate. |
+| Needs-review findings | **3** | All Architecture, all `naming_convention`, all confidence 79, all `detection_method="llm_reasoning"` |
+| Architecture claim-unverified (`claim_status="unverified"`) | **5** | LLM claimed an issue; evidence-bar filter dropped every structured row |
+| Zero-finding (no accepted/needs_review/claim, clean) | **12** | 10 Security (all 10 files) + 2 Architecture (`itsdangerous_encoding.py`, `humanize_filesize.py`) |
+
+`detection_method` distribution: **3/3** of the needs_review findings are
+`llm_reasoning` (Architecture has no static-rule path); Security had no
+findings at all this run, so there is no `static_rule` data point in this
+cohort.
+
+### Did the old Architecture layering false-positive shape recur?
+
+**Not reproduced on this cohort/run — 0 of 10 files got an accepted
+Architecture finding**, versus 6 of 10 files that had at least one
+*accepted* Architecture finding in the two prior batches (4 of 5 in the
+pre-harden `smoke_test_external/` batch — `werkzeug_security.py`,
+`django_crypto.py`, `requests_exceptions.py`, `itsdangerous_encoding.py`,
+each an accepted `layering_violation`; 2 of 5 in the
+`smoke_test_security/` OpenAI batch — `werkzeug_debug_console.py` accepted
+2 `layering_violation` @ 85%, `django_detail_view.py` accepted 1
+`layering_violation` @ 85%). In this fresh run, every one of those same six
+files either produced no architecture claim at all
+(`itsdangerous_encoding.py`) or was correctly routed to `claim_unverified`
+(the other five) instead of `accepted`. Say this plainly and no stronger:
+**not reproduced on this cohort/run** — not "permanently fixed." One clean
+pass on 10 files after a hardening sequence with four prior discovered
+failure modes (§4) is evidence the fix generalizes to this cohort today, not
+proof it can never recur under a different provider, run, or file.
+
+A different, lower-stakes pattern **did** persist: sub-gate
+`naming_convention` findings at 79% confidence appeared in both the old and
+new runs (old: `requests_exceptions.py` JSONDecodeError naming,
+`tqdm_utils.py`/`werkzeug_debug_console.py`/`humanize_filesize.py` various
+naming smells; new: the same three files below). These are weak,
+below-gate signals, not accepted findings, and were never the false-positive
+mode the §38/§39 hardens targeted — noted for completeness, not as a
+regression.
+
+### Per-finding adjudication queue
+
+| # | File | Type | Confidence | Evidence (summary) | Prior judgment comparison |
+| --- | --- | --- | ---: | --- | --- |
+| 1 | `smoke_test_external/requests_exceptions.py` | `naming_convention` | 79 (needs_review) | `JSONDecodeError` class name doesn't end in the file's usual `...Error` suffix pattern per the LLM's read | **Matches** the post-harden `out_postcheck_requests_exceptions.txt` recheck exactly (same type, same confidence, same evidence) — stable, reproducible, not new. |
+| 2 | `smoke_test_external/tqdm_utils.py` | `naming_convention` | 79 (needs_review) | Local function `envwrap` shadows an `envwrap` name also imported from the third-party `envwrap` package | **New** — the old run only logged "claimed issues but produced none specific; treating as clean" with no specific claim text to compare against. The shadowing observation itself is factually accurate in the source (see `try: from envwrap import envwrap` fallback import in `tqdm_utils.py`); whether it rises to a real architecture concern is a judgment call. **Flagged for human adjudication**, not auto-accepted or auto-rejected. |
+| 3 | `smoke_test_security/werkzeug_debug_console/werkzeug_debug_console.py` | `naming_convention` | 79 (needs_review) | Import `helper` (from `.repr import debug_repr, dump, helper`) reads as less descriptive than sibling imports `debug_repr`/`dump` | **Differs** from the prior run on the same file, which had 2 *accepted* `layering_violation` @ 85% (`sys.stdout` access) plus a *different* needs_review `naming_convention` @ 79% (about the `debug_repr` import, not `helper`). The accepted layering pair did not recur (see above); the naming-convention slot recurred as a category but pointed at a different symbol both times — read as the model finding *some* low-confidence naming nit on this file across runs, not the same specific claim twice. |
+
+Claim-unverified files (`werkzeug_security.py`, `django_crypto.py`,
+`tornado_process.py`, `dotenv_parser.py`, `django_detail_view.py`) are not
+included in the adjudication queue above because they carry no accepted
+Finding and no confidence value to adjudicate — they are recorded in
+`claim_unverified_records` in the raw JSON for audit purposes only.
+
+### Explicit no-calibration statement
+
+**No precision, recall, accuracy, or calibration is claimed for this
+cohort.** These 10 files have no exhaustive expected-finding list; "0
+accepted findings" and "3 needs_review at 79%" describe what the pipeline
+did on this pass, not whether those judgments are correct. The one item
+that most needs a human look is adjudication row #2 above (new
+`naming_convention` finding on `tqdm_utils.py`) — everything else either
+matches a prior judgment or is a filtered/clean outcome consistent with the
+post-harden design intent.
+
+---
+
+## 6b. Qualitative OSS confidence re-measurement — Groq A/B (2026-08-08)
+
+**Same fixed cohort as §6** (10 files / 8 projects; identical paths under
+`smoke_test_external/` and `smoke_test_security/`). Measurement/reporting
+only — `COHORT` membership, source files, prompts, filters, and gate were
+not changed. OpenAI §6 numbers above are **not** rewritten; this is a
+second, labeled pass for provider comparison.
+
+**Provider/model/run date:** `LLM_PROVIDER=groq`, model
+`llama-3.3-70b-versatile` (provider default; `LLM_MODEL` unset),
+temperature 0 — confirmed live: every Security and Architecture LLM call
+in this pass logged `llm temperature: using 0.0 (requested 0.0)`. Run date
+**2026-08-08**. Tool: `app/benchmark_qualitative_oss.py --label
+qualitative_oss_groq` (runner unchanged). Raw payload:
+`benchmark/results/qualitative_oss_groq_20260808.json` (gitignored; does
+not clobber the OpenAI `qualitative_oss_20260808.json`).
+
+**Run counts:**
+
+| Metric | Count |
+| --- | ---: |
+| File/worker runs | **20** (10 files × 2 workers) |
+| Completed | **20** |
+| Inconclusive | **0** |
+| Error | **0** |
+
+Same 10 paths as §6 / `COHORT` confirmed against the OpenAI payload
+(`same_paths=true`).
+
+### Confidence-bucket occupancy by worker (Groq)
+
+| Worker | <70 | 70-79 | 80-89 | 90-100 |
+| --- | ---: | ---: | ---: | ---: |
+| security | 0 | 0 | 0 | 0 |
+| architecture | 0 | 0 | 0 | 0 |
+
+### Accepted / needs_review / claim_unverified / zero-finding (Groq)
+
+| Outcome | Count |
+| --- | ---: |
+| Accepted findings | **0** |
+| Needs-review findings | **0** |
+| Architecture claim-unverified | **0** |
+| Zero-finding (Security + Architecture) | **20** |
+
+All 10 files were Security-clean and Architecture-clean on this pass — no
+emitted finding with a confidence value, and no filtered claim that
+survived as `claim_unverified`.
+
+### Side-by-side with §6 OpenAI (same cohort, same day)
+
+| Question | OpenAI (§6) | Groq (§6b) |
+| --- | --- | --- |
+| (a) Accepted layering FPs appear? | **No** (0 accepted; prior accepted layering on 6/10 files not reproduced) | **No** (0 accepted) |
+| (b) naming@79 cluster? | **Yes** — 3 Architecture `naming_convention` @ 79, all `needs_review` | **No** — 0 findings in any bucket |
+| (c) claim_unverified count | **5** | **0** |
+
+**Plain reading:** On this cohort/run, Groq was **quieter** than OpenAI —
+empty confidence buckets, no naming@79 cluster, no claim-unverified
+residue. OpenAI was noisier on soft Architecture signals (sub-gate naming +
+evidence-bar claims) while both providers stayed at **0 accepted** findings
+(including 0 accepted layering). Neither result is “better” in a scored
+sense; this cohort still has no formal ground truth.
+
+**Limitations (same as §6):** qualitative distribution only — no precision,
+recall, accuracy, or calibration claimed. “Not reproduced on this
+cohort/run” for accepted layering under both providers is **not**
+“permanently fixed.” One Groq pass; no further reruns.
+
+---
+
+## 7. Files touched in this documentation step
 
 - `benchmark/results/final_20260804_20260804.json` (new)
 - `benchmark/results/architecture_final_20260804_20260804.json` (new)
@@ -265,12 +526,54 @@ corroborated.
 - `tests/test_benchmark_run.py` — added confidence/detection_method
   propagation tests
 - `tests/test_benchmark_confidence_buckets.py` (new)
+- `app/benchmark_qualitative_oss.py` / `tests/test_benchmark_qualitative_oss.py`
+  — qualitative OSS runner (§6 / §6b); no ground truth
 - `benchmark/results/confbucket_security_20260808.json`,
   `confbucket_architecture_20260808.json` (empty OpenAI-Architecture
   evidence, kept for the gap record above),
   `confbucket_architecture_groq_20260808.json`,
-  `confbucket_realworld_20260808.json` (new; feed §5's table)
-- `benchmark/REPORT.md` (this file; §5 added)
+  `confbucket_realworld_20260808.json` (feed §5 OpenAI / Groq Architecture rows)
+- `benchmark/results/ab_realworld_groq_20260808.json`,
+  `ab_security_groq_20260808.json`,
+  `ab_architecture_openai_20260808.json` (2026-08-08 provider A/B; §1 + §5)
+- `benchmark/results/qualitative_oss_20260808.json` (new; feeds §6, gitignored)
+- `benchmark/results/qualitative_oss_groq_20260808.json` (new; feeds §6b,
+  gitignored — does not clobber OpenAI payload)
+- `benchmark/REPORT.md` (this file; §1 real-world A/B, §5 dual-provider
+  buckets, §6 / §6b qualitative OSS)
+- `DEMO_STUDY.md` — §8 note updated with §6 lesson + §6b OpenAI-vs-Groq
+  panel lines
 
 No detection logic, `Finding` schema semantics, confidence gate threshold,
 or Architecture filters were modified for this step.
+
+### Inconclusive-vs-false-negative scoring fix (2026-08-08, later pass)
+
+- `app/benchmark_run.py` — persists `per_file[*].inconclusive` /
+  `coverage_status`; excludes inconclusive fixtures' ground-truth entries
+  **and** any prediction they produced from the run's precision/recall
+  denominator; reports `inconclusive_fixtures` / `scoring_note` in the
+  payload instead of silently inflating false_negatives
+- `app/benchmark_run_architecture.py`, `app/benchmark_run_real_world.py` —
+  same exclude-from-denominator pattern applied (real-world already
+  persisted `inconclusive`; Architecture did not have the concept at all
+  until this pass — see below)
+- `app/workers/architecture_worker.py` — the failed/rate-limited LLM-call
+  handler now distinguishes `LLMRateLimitedError` from other exceptions and
+  sets `inconclusive=True` on both paths, instead of returning a result
+  indistinguishable from an honest clean review
+- `app/agent.py` — `review_architecture` / `build_architecture_review_output`
+  propagate `inconclusive` through to the report dict and
+  `ReviewResult.coverage_status`
+- `tests/test_benchmark_run.py` — two new focused tests: an inconclusive
+  fixture with zero predictions must not inflate `false_negatives`, and an
+  inconclusive fixture that still produced a partial prediction must not
+  leak into `false_positives`
+- `benchmark/results/ab_security_groq_clean_20260809.json` (new; clean Groq
+  planted-Security A/B after new API key — **4 TP / 0 FP / 0 FN**, 0
+  inconclusive; feeds §5 Groq Security P/R + buckets). Earlier incomplete
+  `ab_security_groq_20260808.json` (recall 0.75 coverage artifact) kept on
+  disk as evidence of the original conflation bug.
+
+Still no detection prompts, filters, `Finding` schema, or confidence gate
+changes in this pass — scoring/reporting correctness only.
