@@ -148,12 +148,129 @@ This was **not** evidence that §33’s insufficient-structure filter broke Arch
 
 ---
 
-## 5. Files touched in this documentation step
+## 5. Confidence-bucket precision analysis (2026-08-08, measurement/reporting only)
+
+**Scope guardrail:** this section changes what gets *persisted and read*, not
+what gets *detected*. `app/benchmark_run.py`, `app/benchmark_run_architecture.py`,
+and `app/benchmark_run_real_world.py` now write each individual finding's
+`confidence` (and `detection_method`) into the results JSON — both as a field
+on `predictions[]` (the same records already used for the official
+TP/FP/precision/recall score) and as a fuller, non-deduplicated
+`per_file[*].confidence_records` list that also includes sub-gate
+`needs_review` findings. The confidence gate threshold, `Finding` schema,
+detection prompts, and Architecture filters were not touched. A new
+read-only tool, `app/benchmark_confidence_buckets.py`, buckets those
+persisted findings by confidence range and computes precision (hit rate
+against ground truth) within each bucket.
+
+**Provider labeling (do not mix rows across providers without labeling —
+per the already-documented Groq vs OpenAI Architecture label-drift gap in
+§4 above):** the table below labels every row with the provider that
+produced it. Security and the real-world mini-suite ran under the repo's
+current default (`LLM_PROVIDER=openai`). Architecture ran under **Groq**,
+not OpenAI — because on this same day, under OpenAI, Architecture claimed
+both planted issues (`layering_violation` on `checkout_handler.py`,
+`dependency_direction` on `low_level_persistence_client.py`) but every claim
+was dropped by the evidence-bar filter before reaching `accepted`/
+`needs_review` (`claim_status="unverified"`), which produced **zero**
+confidence-bucket data points for Architecture (0 TP / 0 FP / 2 FN,
+recall 0.0). That is not a bug introduced by this change — it is a live
+reproduction of the OpenAI Architecture label/evidence gap already recorded
+in §4 ("Architecture label split can be provider-dependent"). Re-running
+Architecture under Groq (a provider choice, not a filter or prompt change)
+reproduced the existing Groq baseline (2 TP / 0 FP, precision 1.0, recall
+1.0) and is what feeds the table below. The empty OpenAI-Architecture run is
+kept on disk (`benchmark/results/confbucket_architecture_20260808.json`) as
+evidence of the gap, not cited as an Architecture number.
+
+| Suite | Provider | Results file |
+| --- | --- | --- |
+| Security (planted) | openai | `benchmark/results/confbucket_security_20260808.json` |
+| Architecture (planted) | **groq** (see above) | `benchmark/results/confbucket_architecture_groq_20260808.json` |
+| Real-world Security mini-suite | openai | `benchmark/results/confbucket_realworld_20260808.json` |
+
+### Confidence-bucket table (real numbers, computed 2026-08-08)
+
+| Suite | Provider | Confidence bucket | Hits / N | Precision | Sample-size note |
+| --- | --- | --- | ---: | ---: | --- |
+| security | openai | <70 | 0 / 0 | n/a | no data in this bucket |
+| security | openai | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| security | openai | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| security | openai | 90-100 | 5 / 5 | 1.00 | N=5 |
+| architecture | groq | <70 | 0 / 0 | n/a | no data in this bucket |
+| architecture | groq | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| architecture | groq | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| architecture | groq | 90-100 | 2 / 2 | 1.00 | **N=2 — too small to read as a rate** |
+| real_world | openai | <70 | 0 / 0 | n/a | no data in this bucket |
+| real_world | openai | 70-79 | 0 / 0 | n/a | no data in this bucket |
+| real_world | openai | 80-89 | 0 / 0 | n/a | no data in this bucket |
+| real_world | openai | 90-100 | 4 / 4 | 1.00 | N=4 |
+
+Reproduce with:
+
+```bash
+python -m app.benchmark_confidence_buckets --markdown \
+  "security:benchmark/results/confbucket_security_20260808.json" \
+  "architecture:benchmark/results/confbucket_architecture_groq_20260808.json" \
+  "real_world:benchmark/results/confbucket_realworld_20260808.json"
+```
+
+**Small-sample honesty (stated plainly, not just implied by the table):**
+Every finding that reached `accepted` or `needs_review` in these three runs
+happened to carry **confidence 90**, so the `<70`, `70-79`, and `80-89`
+buckets are empty (n=0) for all three suites in this measurement — not
+because low-confidence findings are impossible, but because this run's
+planted suites are small (4–7 fixtures each) and every hit/miss the model
+made this time landed at the same round confidence value. The one non-empty
+bucket per suite has **N=2 to N=5** data points. A precision of 1.00 from
+N=2 (Architecture, 90-100 bucket) is **not a statistically meaningful
+rate** — it means "both of the two findings we had were correct," not "this
+model is 100% precise at 90%+ confidence." Treat every number in this table
+as a description of these specific runs, not a calibration claim, and
+re-run before citing it anywhere the sample size matters.
+
+**`detection_method` as a second, complementary trust signal.** Confidence
+is a per-finding number from one source (a static rule's fixed default, or
+the LLM's self-reported confidence). `detection_method` (`static_rule` vs
+`llm_reasoning`) is orthogonal and often more informative: on
+`ops_shell.py`, the same `command_injection` bug was independently flagged
+by both a Semgrep static rule and LLM logic-review, each at confidence 90.
+Two independent detection methods agreeing is a stronger trust signal than
+either one's self-reported confidence alone. Findings backed only by
+`llm_reasoning` (the majority in this planted suite, since most bug classes
+here — IDOR, secrets, path traversal, layering, dependency-direction — have
+no matching static rule) should be read as carrying that single-source
+caveat; `static_rule` + `llm_reasoning` agreement should be read as
+corroborated.
+
+---
+
+## 6. Files touched in this documentation step
 
 - `benchmark/results/final_20260804_20260804.json` (new)
 - `benchmark/results/architecture_final_20260804_20260804.json` (new)
 - `benchmark/results/cross_worker_final_20260804_20260804.json` (new)
 - `benchmark/results/real_world_final_20260804_20260804.json` (new)
-- `benchmark/REPORT.md` (this file; refreshed)
+- `app/benchmark.py` — `PredictedFinding` gained optional `confidence` /
+  `detection_method` fields (informational only; matching in `evaluate` is
+  unchanged)
+- `app/benchmark_run.py` — `predictions_from_report_items` now carries
+  confidence/detection_method through; new
+  `confidence_records_from_report_items` helper feeds
+  `per_file[*].confidence_records`
+- `app/benchmark_run_architecture.py`, `app/benchmark_run_real_world.py` —
+  same `confidence_records` addition to their `per_file` notes
+- `app/benchmark_confidence_buckets.py` (new) — confidence-bucket precision
+  analysis tool
+- `tests/test_benchmark_run.py` — added confidence/detection_method
+  propagation tests
+- `tests/test_benchmark_confidence_buckets.py` (new)
+- `benchmark/results/confbucket_security_20260808.json`,
+  `confbucket_architecture_20260808.json` (empty OpenAI-Architecture
+  evidence, kept for the gap record above),
+  `confbucket_architecture_groq_20260808.json`,
+  `confbucket_realworld_20260808.json` (new; feed §5's table)
+- `benchmark/REPORT.md` (this file; §5 added)
 
-No application code under `app/` was modified for this step.
+No detection logic, `Finding` schema semantics, confidence gate threshold,
+or Architecture filters were modified for this step.

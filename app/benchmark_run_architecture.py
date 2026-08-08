@@ -30,7 +30,10 @@ from typing import Any
 from dotenv import load_dotenv
 
 from app.benchmark import PredictedFinding, ScoreReport, evaluate, load_ground_truth
-from app.benchmark_run import predictions_from_report_items
+from app.benchmark_run import (
+    confidence_records_from_report_items,
+    predictions_from_report_items,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
@@ -132,6 +135,12 @@ def run_architecture_benchmark(
                 (item.get("structured_finding") or {}).get("finding_type")
                 for item in needs_review
             ],
+            "confidence_records": (
+                confidence_records_from_report_items(accepted, verdict="accepted")
+                + confidence_records_from_report_items(
+                    needs_review, verdict="needs_review"
+                )
+            ),
             "message": report.get("message"),
         }
         per_file.append(note)

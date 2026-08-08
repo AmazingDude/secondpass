@@ -15,10 +15,20 @@ DEFAULT_GROUND_TRUTH_PATH = (
 
 
 class PredictedFinding(BaseModel):
-    """Minimal prediction record for v1 matching (file_path + finding_type)."""
+    """Prediction record for v1 matching (file_path + finding_type).
+
+    ``confidence`` and ``detection_method`` are optional and purely
+    informational — scoring/matching in ``evaluate`` below still keys only on
+    (file_path, finding_type). They exist so confidence-bucket precision
+    analysis (app/benchmark_confidence_buckets.py) can read per-finding
+    confidence straight out of the persisted results JSON instead of only
+    aggregate precision/recall.
+    """
 
     file_path: str
     finding_type: str
+    confidence: int | None = Field(default=None, ge=0, le=100)
+    detection_method: str | None = None
 
 
 class ScoreReport(BaseModel):

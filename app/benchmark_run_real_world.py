@@ -30,6 +30,7 @@ from app.benchmark_run import (
     SEMGREP_TO_BENCHMARK_TYPE,
     _live_review,
     _offline_review,
+    confidence_records_from_report_items,
     predictions_from_report_items,
 )
 
@@ -165,6 +166,12 @@ def run_benchmark(
                 (item.get("structured_finding") or {}).get("finding_type")
                 for item in needs_review
             ],
+            "confidence_records": (
+                confidence_records_from_report_items(accepted, verdict="accepted")
+                + confidence_records_from_report_items(
+                    needs_review, verdict="needs_review"
+                )
+            ),
             "message": report.get("message"),
         }
         per_file.append(note)

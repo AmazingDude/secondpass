@@ -82,7 +82,14 @@ def predictions_from_report_items(
     *,
     fixture_path: str,
 ) -> list[PredictedFinding]:
-    """Convert enriched report findings into PredictedFinding rows for one fixture."""
+    """Convert enriched report findings into PredictedFinding rows for one fixture.
+
+    Confidence/detection_method are carried through from each finding's
+    structured_finding so they land in the persisted results JSON
+    (predictions[].confidence) for later confidence-bucket analysis. This is
+    the same one-per-type-per-file record that scoring already uses — no
+    change to matching/dedup behavior, only additional informational fields.
+    """
     predictions: list[PredictedFinding] = []
     seen: set[str] = set()
     for item in items:
@@ -96,10 +103,53 @@ def predictions_from_report_items(
         if finding_type in seen:
             continue
         seen.add(finding_type)
+        confidence = structured.get("confidence")
         predictions.append(
-            PredictedFinding(file_path=fixture_path, finding_type=finding_type)
+            PredictedFinding(
+                file_path=fixture_path,
+                finding_type=finding_type,
+                confidence=int(confidence) if isinstance(confidence, (int, float)) else None,
+                detection_method=structured.get("detection_method") or None,
+            )
         )
     return predictions
+
+
+def confidence_records_from_report_items(
+    items: list[dict[str, Any]],
+    *,
+    verdict: str,
+) -> list[dict[str, Any]]:
+    """Per-finding confidence records for the confidence-bucket analysis.
+
+    Deliberately NOT deduplicated by finding_type (unlike
+    predictions_from_report_items) and NOT gated by --include-needs-review:
+    the bucket analysis wants every individual finding's confidence,
+    including sub-gate needs_review findings, so buckets below the gate
+    threshold (e.g. <70, 70-79) are not structurally empty. This list is
+    purely additional measurement data; it does not feed ScoreReport/evaluate.
+    """
+    records: list[dict[str, Any]] = []
+    for item in items:
+        structured = item.get("structured_finding") or {}
+        raw_type = str(
+            structured.get("finding_type")
+            or (item.get("finding") or {}).get("rule_id")
+            or ""
+        )
+        confidence = structured.get("confidence")
+        if not isinstance(confidence, (int, float)):
+            continue
+        records.append(
+            {
+                "finding_type": normalize_benchmark_finding_type(raw_type),
+                "raw_finding_type": raw_type,
+                "confidence": int(confidence),
+                "detection_method": structured.get("detection_method") or None,
+                "verdict": verdict,
+            }
+        )
+    return records
 
 
 def _offline_review(fixture_abs: Path) -> dict[str, Any]:
@@ -248,6 +298,12 @@ def run_benchmark(
                 (item.get("structured_finding") or {}).get("finding_type")
                 for item in needs_review
             ],
+            "confidence_records": (
+                confidence_records_from_report_items(accepted, verdict="accepted")
+                + confidence_records_from_report_items(
+                    needs_review, verdict="needs_review"
+                )
+            ),
             "message": report.get("message"),
         }
         per_file.append(note)

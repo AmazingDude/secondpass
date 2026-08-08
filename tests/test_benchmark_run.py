@@ -6,6 +6,7 @@ from pathlib import Path
 
 from app.benchmark import evaluate, load_ground_truth
 from app.benchmark_run import (
+    confidence_records_from_report_items,
     fixture_relative_path,
     normalize_benchmark_finding_type,
     predictions_from_report_items,
@@ -55,6 +56,83 @@ def test_predictions_from_accepted_items_dedupe_and_remap(
     )
     assert len(predictions) == 1
     assert predictions[0].finding_type == "command_injection"
+
+
+def test_predictions_from_report_items_carries_confidence_and_method() -> None:
+    items = [
+        {
+            "structured_finding": {
+                "finding_type": "missing_ownership_check",
+                "confidence": 92,
+                "detection_method": "llm_reasoning",
+            }
+        }
+    ]
+    predictions = predictions_from_report_items(
+        items, fixture_path="benchmark/fixtures/notes_idor.py"
+    )
+    assert len(predictions) == 1
+    assert predictions[0].confidence == 92
+    assert predictions[0].detection_method == "llm_reasoning"
+
+
+def test_predictions_from_report_items_confidence_missing_is_none() -> None:
+    items = [{"structured_finding": {"finding_type": "missing_ownership_check"}}]
+    predictions = predictions_from_report_items(
+        items, fixture_path="benchmark/fixtures/notes_idor.py"
+    )
+    assert predictions[0].confidence is None
+    assert predictions[0].detection_method is None
+
+
+def test_confidence_records_include_both_verdicts_without_dedup() -> None:
+    accepted = [
+        {
+            "structured_finding": {
+                "finding_type": "missing_ownership_check",
+                "confidence": 95,
+                "detection_method": "llm_reasoning",
+            }
+        }
+    ]
+    needs_review = [
+        {
+            "structured_finding": {
+                "finding_type": "missing_ownership_check",
+                "confidence": 60,
+                "detection_method": "llm_reasoning",
+            }
+        },
+        {
+            "structured_finding": {
+                "finding_type": "hardcoded_secret",
+                "confidence": 65,
+                "detection_method": "static_rule",
+            }
+        },
+    ]
+    records = confidence_records_from_report_items(
+        accepted, verdict="accepted"
+    ) + confidence_records_from_report_items(needs_review, verdict="needs_review")
+
+    assert len(records) == 3  # no dedup by finding_type, unlike predictions_from_report_items
+    assert records[0] == {
+        "finding_type": "missing_ownership_check",
+        "raw_finding_type": "missing_ownership_check",
+        "confidence": 95,
+        "detection_method": "llm_reasoning",
+        "verdict": "accepted",
+    }
+    assert [r["verdict"] for r in records] == [
+        "accepted",
+        "needs_review",
+        "needs_review",
+    ]
+
+
+def test_confidence_records_skip_missing_confidence() -> None:
+    items = [{"structured_finding": {"finding_type": "missing_ownership_check"}}]
+    assert confidence_records_from_report_items(items, verdict="accepted") == []
 
 
 def test_fixture_relative_path_from_absolute(tmp_path: Path) -> None:
