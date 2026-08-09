@@ -110,7 +110,19 @@ export function HistoryView({ onOpenReview }: Props) {
               </thead>
               <tbody>
                 {visible.map((review) => (
-                  <tr key={review.id}>
+                  <tr
+                    key={review.id}
+                    className="history-row is-clickable"
+                    tabIndex={0}
+                    aria-label={`Open review ${review.id}`}
+                    onClick={() => onOpenReview(review)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        event.preventDefault();
+                        onOpenReview(review);
+                      }
+                    }}
+                  >
                     <td className="mono history-col-id">{review.id}</td>
                     <td className="history-col-when">
                       {formatWhen(review.created_at)}
@@ -142,13 +154,7 @@ export function HistoryView({ onOpenReview }: Props) {
                       )}
                     </td>
                     <td className="history-col-action">
-                      <button
-                        type="button"
-                        className="btn btn-ghost btn-compact"
-                        onClick={() => onOpenReview(review)}
-                      >
-                        View
-                      </button>
+                      <span className="history-row-hint">Open</span>
                     </td>
                   </tr>
                 ))}

@@ -230,7 +230,7 @@ export function MemoryView({ initialReviewId = null }: Props) {
                 </select>
                 {selected ? (
                   <div className="finding-selection-summary">
-                    <span className="badge badge-accepted">
+                    <span className="badge badge-neutral">
                       {selected.confidence}% confidence
                     </span>
                     <span className="badge badge-neutral">
@@ -338,7 +338,7 @@ export function MemoryView({ initialReviewId = null }: Props) {
           {formError ? <p className="error-text">{formError}</p> : null}
           {formOk ? (
             <div
-              className={`outcome-notice outcome-notice--${formOk.tone}`}
+              className={`outcome-status-notice outcome-status-notice--${formOk.tone}`}
               role="status"
             >
               {formOk.tone === "success" ? (

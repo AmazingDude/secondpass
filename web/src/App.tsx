@@ -10,7 +10,12 @@ type Tab = "submit" | "findings" | "history" | "memory";
 
 type Screen =
   | { name: "submit" }
-  | { name: "findings"; reviews: ReviewPayload[]; jobPath?: string }
+  | {
+      name: "findings";
+      reviews: ReviewPayload[];
+      jobPath?: string;
+      backTo: "submit" | "history";
+    }
   | { name: "history" }
   | { name: "memory"; initialReviewId?: number | null };
 
@@ -36,12 +41,17 @@ export default function App() {
   const [lastFindings, setLastFindings] = useState<{
     reviews: ReviewPayload[];
     jobPath?: string;
+    backTo: "submit" | "history";
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
   const openFindings = useCallback(
-    (reviews: ReviewPayload[], jobPath?: string) => {
-      const next = { reviews, jobPath };
+    (
+      reviews: ReviewPayload[],
+      jobPath?: string,
+      backTo: "submit" | "history" = "history",
+    ) => {
+      const next = { reviews, jobPath, backTo };
       setLastFindings(next);
       setScreen({ name: "findings", ...next });
     },
@@ -58,7 +68,7 @@ export default function App() {
       const reviews = await Promise.all(reviewIds.map((id) => getReview(id)));
       // Stay on Submit so the live timeline/audit trail remain visible;
       // Findings opens only when the user chooses.
-      setLastFindings({ reviews, jobPath: job.path });
+      setLastFindings({ reviews, jobPath: job.path, backTo: "submit" });
     } catch (err) {
       setLoadError(err instanceof Error ? err.message : String(err));
     }
@@ -84,7 +94,7 @@ export default function App() {
     if (lastFindings) {
       setScreen({ name: "findings", ...lastFindings });
     } else {
-      setScreen({ name: "findings", reviews: [] });
+      setScreen({ name: "findings", reviews: [], backTo: "history" });
     }
   }
 
@@ -141,7 +151,12 @@ export default function App() {
               findingsReady={Boolean(lastFindings)}
               onViewFindings={
                 lastFindings
-                  ? () => openFindings(lastFindings.reviews, lastFindings.jobPath)
+                  ? () =>
+                      openFindings(
+                        lastFindings.reviews,
+                        lastFindings.jobPath,
+                        "submit",
+                      )
                   : undefined
               }
             />
@@ -151,15 +166,15 @@ export default function App() {
             <FindingsView
               reviews={screen.reviews}
               jobPath={screen.jobPath}
-              onBack={() => goTab("history")}
-              backLabel="History"
+              onBack={() => goTab(screen.backTo)}
+              backLabel={screen.backTo === "submit" ? "Submit" : "History"}
             />
           ) : null}
 
           {screen.name === "history" ? (
             <HistoryView
               onOpenReview={(review) => {
-                openFindings([review], review.file_path);
+                openFindings([review], review.file_path, "history");
               }}
             />
           ) : null}

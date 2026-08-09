@@ -1922,6 +1922,27 @@ a {
   border-bottom: none;
 }
 
+.history-row.is-clickable {
+  cursor: pointer;
+  transition: background var(--motion-fast) var(--ease-out);
+}
+
+.history-row.is-clickable:hover,
+.history-row.is-clickable:focus-visible {
+  background: color-mix(in srgb, var(--accent-blue) 6%, var(--surface));
+  outline: none;
+}
+
+.history-row-hint {
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.history-row.is-clickable:hover .history-row-hint,
+.history-row.is-clickable:focus-visible .history-row-hint {
+  color: var(--accent-blue);
+}
+
 .history-col-id {
   width: 3rem;
 }

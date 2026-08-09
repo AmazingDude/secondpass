@@ -552,7 +552,6 @@ export function SubmitReview({
             disabled={
               submitting ||
               polling ||
-              previewing ||
               (preview?.kind === "directory" && preview.selected_count === 0)
             }
           >
@@ -731,11 +730,6 @@ export function SubmitReview({
               </div>
               <div className="submit-status-meta">
                 <span className="job-status-id mono">job_id {jobId}</span>
-                <span
-                  className={`submit-status-pill submit-status-pill--${statusLabel}`}
-                >
-                  {statusLabel}
-                </span>
               </div>
             </div>
 
