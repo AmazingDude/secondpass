@@ -1,5 +1,12 @@
 import { useEffect, useMemo, useRef, useState, type FormEvent } from "react";
 import {
+  AlertTriangle,
+  Check,
+  Circle,
+  CornerDownRight,
+  Loader2,
+} from "lucide-react";
+import {
   getJob,
   getJobAudit,
   submitReview,
@@ -20,6 +27,9 @@ const JOB_STAGES = [
 type Props = {
   onCompleted: (job: JobPayload) => void;
   initialPath?: string;
+  /** True once findings for the finished job are loaded (user stays on Submit). */
+  findingsReady?: boolean;
+  onViewFindings?: () => void;
 };
 
 const STAGE_LABELS: Record<string, string> = {
@@ -150,7 +160,14 @@ function AuditLogRow({ event }: { event: AuditEvent }) {
           ) : null}
         </div>
         {argsTail ? (
-          <div className="audit-log-row-detail">↳ {argsTail}</div>
+          <div className="audit-log-row-detail">
+            <CornerDownRight
+              className="audit-log-detail-icon"
+              strokeWidth={2}
+              aria-hidden
+            />
+            {argsTail}
+          </div>
         ) : null}
       </div>
     );
@@ -168,13 +185,56 @@ function AuditLogRow({ event }: { event: AuditEvent }) {
         <span className="audit-tok-msg">{label}</span>
       </div>
       {stageDetail ? (
-        <div className="audit-log-row-detail">↳ {stageDetail}</div>
+        <div className="audit-log-row-detail">
+          <CornerDownRight
+            className="audit-log-detail-icon"
+            strokeWidth={2}
+            aria-hidden
+          />
+          {stageDetail}
+        </div>
       ) : null}
     </div>
   );
 }
 
-export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
+function JobStageIcon({
+  state,
+}: {
+  state: "idle" | "active" | "done" | "warn";
+}) {
+  if (state === "done") {
+    return <Check className="job-stage-icon" strokeWidth={2.5} aria-hidden />;
+  }
+  if (state === "warn") {
+    return (
+      <AlertTriangle className="job-stage-icon" strokeWidth={2.5} aria-hidden />
+    );
+  }
+  if (state === "active") {
+    return (
+      <Loader2
+        className="job-stage-icon job-stage-icon--spin"
+        strokeWidth={2.5}
+        aria-hidden
+      />
+    );
+  }
+  return (
+    <Circle
+      className="job-stage-icon job-stage-icon--idle"
+      strokeWidth={2}
+      aria-hidden
+    />
+  );
+}
+
+export function SubmitReview({
+  onCompleted,
+  initialPath = "",
+  findingsReady = false,
+  onViewFindings,
+}: Props) {
   const [path, setPath] = useState(initialPath);
   const [jobId, setJobId] = useState<string | null>(null);
   const [job, setJob] = useState<JobPayload | null>(null);
@@ -396,13 +456,7 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
                       className={`job-stage-check job-stage-check--${state}`}
                     >
                       <span className="job-stage-mark" aria-hidden="true">
-                        {state === "done"
-                          ? "✓"
-                          : state === "warn"
-                            ? "!"
-                            : state === "active"
-                              ? "›"
-                              : "·"}
+                        <JobStageIcon state={state} />
                       </span>
                       <span>{stage.label}</span>
                     </li>
@@ -410,6 +464,22 @@ export function SubmitReview({ onCompleted, initialPath = "" }: Props) {
                 })}
               </ol>
             </div>
+
+            {status === "completed" && findingsReady && onViewFindings ? (
+              <div className="submit-complete-banner">
+                <div>
+                  <strong>Review complete.</strong> Timeline and audit trail stay
+                  here — open findings when you are ready.
+                </div>
+                <button
+                  type="button"
+                  className="btn btn-primary"
+                  onClick={onViewFindings}
+                >
+                  View findings
+                </button>
+              </div>
+            ) : null}
 
             <AgentTimeline
               states={pipeline.states}

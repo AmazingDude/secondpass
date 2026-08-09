@@ -40,12 +40,12 @@ Use this file for slides and deeper explanation. The README keeps the one-screen
 └───────────────────────────────────┬──────────────────────────────────────┘
                                     │
                                     ▼
-┌──────────────────────────────────────────────────────────────────────────┐
-│                         STATE                                            │
-│                                                                          │
-│   SQLite `.secondpass/`     reviews · verified_outcomes · audit_events   │
+┌───────────────────────────────────────────────────────────────────────────┐
+│                         STATE                                             │
+│                                                                           │
+│   SQLite `.secondpass/`     reviews · verified_outcomes · audit_events    │
 │   ChromaDB `.chromadb/`     curated seed lessons (retrieval during review)│
-└──────────────────────────────────────────────────────────────────────────┘
+└───────────────────────────────────────────────────────────────────────────┘
 ```
 
 ---
@@ -78,7 +78,7 @@ Target path
          accepted  /  needs_review
 ```
 
-**Why both Semgrep and logic review:** Semgrep catches many rule-shaped issues; ownership / IDOR-style gaps often need the LLM pass. Memory retrieval is your *curated seed* lessons in Chroma — not a generic AppSec corpus, and not the SQLite verified-outcome log.
+**Why both Semgrep and logic review:** Semgrep catches many rule-shaped issues; ownership / IDOR-style gaps often need the LLM pass. Memory retrieval is your _curated seed_ lessons in Chroma — not a generic AppSec corpus, and not the SQLite verified-outcome log.
 
 ---
 
@@ -118,10 +118,10 @@ Target path
 
 ## 4. Memory model (two stores on purpose)
 
-| Store | What | Who writes |
-| --- | --- | --- |
-| **Chroma** | Semantic seed lessons (`security_lessons.json`) **plus** human-confirmed accepted lessons — retrieved during Security review | Seeded at setup; **human ACCEPT** via CLI/dashboard (Supervisor **does not** auto-`save_finding`) |
-| **SQLite verified outcomes** | Accept / reject + reason on a concrete finding | You, via CLI or dashboard |
+| Store                        | What                                                                                                                         | Who writes                                                                                        |
+| ---------------------------- | ---------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------------------------------------------------- |
+| **Chroma**                   | Semantic seed lessons (`security_lessons.json`) **plus** human-confirmed accepted lessons — retrieved during Security review | Seeded at setup; **human ACCEPT** via CLI/dashboard (Supervisor **does not** auto-`save_finding`) |
+| **SQLite verified outcomes** | Accept / reject + reason on a concrete finding                                                                               | You, via CLI or dashboard                                                                         |
 
 Supervisor does **not** auto-promote findings into Chroma. A human ACCEPT writes SQLite first, then may promote a concise lesson into Chroma for future `search_memory` retrieval. Rejects remain SQLite-only. Gate “accepted” (confidence ≥ threshold) is not the same as human accepted.
 

@@ -192,7 +192,7 @@ secondpass/
 ## Notes & limits
 
 - Personal tool — not a complete SAST platform. Do not claim reliability on arbitrary real-world repos from these numbers alone.
-- Verified outcomes are a human decision log; they do not yet change what the next review retrieves.
+- Verified outcomes are always written to SQLite. Human ACCEPT may also promote a concise lesson into Chroma for later retrieval; REJECT stays SQLite-only. Near-duplicates of existing lessons are skipped.
 - Confidence is LLM self-reported; temperature=0 cuts variance, it does **not** calibrate confidence.
 - Architecture label stability can be provider-dependent (`layering_violation` vs `dependency_direction`).
 - Incomplete coverage (`inconclusive`) ≠ clean ≠ needs_review.

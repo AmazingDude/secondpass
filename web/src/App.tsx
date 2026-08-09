@@ -48,22 +48,21 @@ export default function App() {
     [],
   );
 
-  const handleCompleted = useCallback(
-    async (job: JobPayload) => {
-      setLoadError(null);
-      const ids = job.persisted_review_ids || {};
-      const reviewIds = [ids.security, ids.architecture].filter(
-        (id): id is number => typeof id === "number",
-      );
-      try {
-        const reviews = await Promise.all(reviewIds.map((id) => getReview(id)));
-        openFindings(reviews, job.path);
-      } catch (err) {
-        setLoadError(err instanceof Error ? err.message : String(err));
-      }
-    },
-    [openFindings],
-  );
+  const handleCompleted = useCallback(async (job: JobPayload) => {
+    setLoadError(null);
+    const ids = job.persisted_review_ids || {};
+    const reviewIds = [ids.security, ids.architecture].filter(
+      (id): id is number => typeof id === "number",
+    );
+    try {
+      const reviews = await Promise.all(reviewIds.map((id) => getReview(id)));
+      // Stay on Submit so the live timeline/audit trail remain visible;
+      // Findings opens only when the user chooses.
+      setLastFindings({ reviews, jobPath: job.path });
+    } catch (err) {
+      setLoadError(err instanceof Error ? err.message : String(err));
+    }
+  }, []);
 
   function goTab(tab: Tab) {
     setLoadError(null);
@@ -139,6 +138,12 @@ export default function App() {
             <SubmitReview
               initialPath={DEMO_PATH}
               onCompleted={handleCompleted}
+              findingsReady={Boolean(lastFindings)}
+              onViewFindings={
+                lastFindings
+                  ? () => openFindings(lastFindings.reviews, lastFindings.jobPath)
+                  : undefined
+              }
             />
           ) : null}
 

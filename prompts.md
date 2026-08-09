@@ -583,7 +583,7 @@ Takeaway: Architecture is noisier than Security on "conventions" smells; LLM con
 ## 23. Supervisor path-level aggregation (Security + Architecture)
 
 **Tool:** Cursor (Grok 4.5)
-**Goal:** Satisfy Awais’s “Supervisor routes and aggregates” — one entry point runs both top-level workers and merges counts into a combined report. Keep Memory/Web `supervise_finding` inside Security.
+**Goal:** Satisfy “Supervisor routes and aggregates” — one entry point runs both top-level workers and merges counts into a combined report. Keep Memory/Web `supervise_finding` inside Security.
 
 **Result:** `supervise_review` + `aggregate_worker_reports` in `app/supervisor.py`; `review_path` / CLI `review <path>` call Supervisor once; summary panel then Security/Architecture panels; offline aggregation tests. Gate threshold 80 unchanged. `--diff` still Security-only.
 
@@ -643,7 +643,7 @@ Takeaway: Architecture is noisier than Security on "conventions" smells; LLM con
 ## 26. Wire verified-outcome memory; disable Chroma auto-save
 
 **Tool:** Cursor (separate chat)
-**Goal:** Awais objective #3 — durable memory only from human accept/reject + reason. Stop Supervisor from inventing Chroma lessons.
+**Goal:** Durable memory only from human accept/reject + reason. Stop Supervisor from inventing Chroma lessons.
 
 **Result:** Removed Supervisor `save_finding` tool loop (logs `supervisor skip save_finding — verified outcomes require human accept/reject`). `supervise_review` persists each worker `ReviewResult` via `save_review`. CLI: `decide`, `list-reviews`, `list-outcomes`. Helpers in `app/verified.py`. Chroma still retrieves seed lessons only. Offline tests in `tests/test_verified_outcomes.py` (4 passed).
 
@@ -658,7 +658,7 @@ Takeaway: Architecture is noisier than Security on "conventions" smells; LLM con
 ## 27. FastAPI async submit → poll → result
 
 **Tool:** Cursor (separate chat)
-**Goal:** Week 7 backend — HTTP surface for submit/history/outcomes without blocking the event loop; align PRD with Awais (“submit a review” allowed via API).
+**Goal:** Week 7 backend — HTTP surface for submit/history/outcomes without blocking the event loop; (“submit a review” allowed via API).
 
 **Result:** `app/jobs.py` (in-memory jobs + `ThreadPoolExecutor`); `app/api.py` (POST/GET reviews, job poll, outcomes); fastapi/uvicorn/httpx in requirements. §4.4 updated: API may submit scans; CLI/MCP primary. Offline `tests/test_api.py` (4 passed) includes poll-while-`running`.
 
@@ -686,7 +686,7 @@ Takeaway: Architecture is noisier than Security on "conventions" smells; LLM con
 
 **Result:** `audit_events` table in SQLite; `app/audit.py` (ContextVar scopes, redacted prompt summaries); wired through `supervise_review(job_id=…)`; `GET /reviews/jobs/{job_id}/audit` + `secondpass audit <job_id>`. Offline `tests/test_audit_trail.py` asserts security schema before architecture schema.
 
-**Live verify catch (2026-07-31) — would have marked “done” wrongly:** First live API submit failed with `OperationalError: no such column: job_id`. Cause: `_SCHEMA_SQL` ran `CREATE INDEX … ON reviews(job_id)` via `executescript` *before* `_migrate_schema` could `ALTER TABLE … ADD COLUMN job_id` on pre-existing DBs; migration never ran. Temp-DB unit tests never hit this. Fix: remove that index from the bootstrap script; create it only after migrate. Added `test_init_db_migrates_pre_job_id_reviews_table`.
+**Live verify catch (2026-07-31) — would have marked “done” wrongly:** First live API submit failed with `OperationalError: no such column: job_id`. Cause: `_SCHEMA_SQL` ran `CREATE INDEX … ON reviews(job_id)` via `executescript` _before_ `_migrate_schema` could `ALTER TABLE … ADD COLUMN job_id` on pre-existing DBs; migration never ran. Temp-DB unit tests never hit this. Fix: remove that index from the bootstrap script; create it only after migrate. Added `test_init_db_migrates_pre_job_id_reviews_table`.
 
 **Live verify after fix:** `job_id=11d09fd7-…`, 17 events, one sequence: `review_start` → security `prompt_io` / `schema_validation` / `confidence_gate` → architecture `prompt_io` / `schema_validation` / `confidence_gate` → both `review_persisted` → `review_complete`. Security schema/gate ids precede architecture’s. `VERIFY_OK` on the strong order check, not just “both workers appear.”
 
@@ -705,14 +705,14 @@ Takeaway: Architecture is noisier than Security on "conventions" smells; LLM con
 
 **Live scores (2026-07-31):**
 
-| Worker | Fixtures | TP | FP | FN | Precision | Recall |
-|---|---|---|---|---|---|---|
-| Security | 5 (clean, IDOR, shell, secret, traversal) | 4 | 0 | 0 | **1.0** | **1.0** |
-| Architecture | 3 (layering, dependency-direction, clean) | 2 | 2 | 0 | **0.5** | **1.0** |
+| Worker       | Fixtures                                  | TP  | FP  | FN  | Precision | Recall  |
+| ------------ | ----------------------------------------- | --- | --- | --- | --------- | ------- |
+| Security     | 5 (clean, IDOR, shell, secret, traversal) | 4   | 0   | 0   | **1.0**   | **1.0** |
+| Architecture | 3 (layering, dependency-direction, clean) | 2   | 2   | 0   | **0.5**   | **1.0** |
 
 Security stayed 1.0/1.0 — the two new bug classes were both textbook-obvious and matched the LLM's natural labeling on the first live probe, no ground-truth-label tuning needed.
 
-**Architecture did NOT stay 1.0/1.0 — precision dropped to 0.5, reproduced identically on a second run (temp=0 pinning holding).** Root cause is real, not a flaky fixture: `run_architecture_worker` puts the target file's cross-file context siblings in the same prompt, and the model reports issues it can see in *any* context file, not just the target. Reviewing `checkout_handler.py` correctly finds its own `layering_violation` but *also* reports `dependency_direction` whose evidence text is plainly about the sibling `low_level_persistence_client.py` — and vice versa. Both fixtures are real bugs (recall 1.0, nothing missed), but each review over-attributes the *other* fixture's issue to itself, so scored-by-target-file precision is 0.5. This is a genuine cross-file-context seam PRD §4.1 flagged as needed ("cross-file context, not just the single file") but never stress-tested with two co-located bugs before. Not smoothing this over — it's the most useful number this benchmark expansion produced.
+**Architecture did NOT stay 1.0/1.0 — precision dropped to 0.5, reproduced identically on a second run (temp=0 pinning holding).** Root cause is real, not a flaky fixture: `run_architecture_worker` puts the target file's cross-file context siblings in the same prompt, and the model reports issues it can see in _any_ context file, not just the target. Reviewing `checkout_handler.py` correctly finds its own `layering_violation` but _also_ reports `dependency_direction` whose evidence text is plainly about the sibling `low_level_persistence_client.py` — and vice versa. Both fixtures are real bugs (recall 1.0, nothing missed), but each review over-attributes the _other_ fixture's issue to itself, so scored-by-target-file precision is 0.5. This is a genuine cross-file-context seam PRD §4.1 flagged as needed ("cross-file context, not just the single file") but never stress-tested with two co-located bugs before. Not smoothing this over — it's the most useful number this benchmark expansion produced.
 
 **Independent confirm (terminal, 2026-07-31):** Re-ran both evals myself-via-user transcript — Security `ScoreReport` 4/0/0 → 1.0/1.0 written to `security_expanded_20260731.json`; Architecture 2/2/0 → 0.5/1.0 in `architecture_baseline_20260731.json`, with per-file predicted lists exactly showing the sibling misattribution. Next step: target-file attribution filter (§31), same harden family as §21/§25 — fix before dashboard.
 
@@ -729,19 +729,19 @@ Security stayed 1.0/1.0 — the two new bug classes were both textbook-obvious a
 
 **After re-measure (2026-07-31, `architecture_attribution_fix`):**
 
-| | Before (§30 baseline) | After (attribution filter) |
-| --- | --- | --- |
-| Precision | **0.5** (2 TP / 2 FP) | **1.0** (2 TP / 0 FP) |
-| Recall | **1.0** (0 FN) | **1.0** (0 FN) |
-| checkout predicted | layering + dependency (sibling leak) | layering only |
-| persistence predicted | dependency + layering (sibling leak) | dependency only |
-| clean | clean | clean |
+|                       | Before (§30 baseline)                | After (attribution filter) |
+| --------------------- | ------------------------------------ | -------------------------- |
+| Precision             | **0.5** (2 TP / 2 FP)                | **1.0** (2 TP / 0 FP)      |
+| Recall                | **1.0** (0 FN)                       | **1.0** (0 FN)             |
+| checkout predicted    | layering + dependency (sibling leak) | layering only              |
+| persistence predicted | dependency + layering (sibling leak) | dependency only            |
+| clean                 | clean                                | clean                      |
 
 **Independent verify (manual CLI + re-benchmark, 2026-07-31):** `checkout_handler` Architecture → only `layering_violation`; `low_level_persistence_client` → only `dependency_direction`; live ScoreReport 2/0/0 → 1.0/1.0 in `architecture_attribution_fix_20260731.json`. Matches the claimed table.
 
 **Side observation (not fixed here):** full CLI `supervise_review` still runs Security on these architecture fixtures, and Security invents security-flavored labels for the same structural bugs (`bypass_of_business_rules`, `dependency_direction_violation` + irrelevant CWE-345 web context). Architecture attribution is fixed; the reverse bleed (Security over-claiming architecture fixtures) is a separate, optional harden — log only for now.
 
-**Review notes:** Prompt alone is soft; the filter is the hard enforcement. Cross-file context stays — only wrong *attribution* is cut. Second measured before→after reliability win after §24 temperature pin.
+**Review notes:** Prompt alone is soft; the filter is the hard enforcement. Cross-file context stays — only wrong _attribution_ is cut. Second measured before→after reliability win after §24 temperature pin.
 
 ---
 
@@ -754,13 +754,13 @@ Security stayed 1.0/1.0 — the two new bug classes were both textbook-obvious a
 
 **After re-measure (2026-08-01):**
 
-| | Before (§30/§31 Security on own suite) | After (reverse-bleed harden) |
-| --- | --- | --- |
-| Security precision | **1.0** | **1.0** |
-| Security recall | **1.0** | **1.0** |
-| Security on Architecture fixtures | invented architecture-flavored labels (§31) | **0 accepted / 0 needs_review** on all 6 |
-| Architecture own-suite P/R | 1.0 / 1.0 (§31) | **1.0 / 1.0** (untouched worker) |
-| Architecture authz-bleed on Security fixtures | N/A | **ok** (no ownership/IDOR labels); note: Architecture may still emit non-authz `layering_violation` on `ops_shell`/`path_traversal` — out of scope here |
+|                                               | Before (§30/§31 Security on own suite)      | After (reverse-bleed harden)                                                                                                                            |
+| --------------------------------------------- | ------------------------------------------- | ------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| Security precision                            | **1.0**                                     | **1.0**                                                                                                                                                 |
+| Security recall                               | **1.0**                                     | **1.0**                                                                                                                                                 |
+| Security on Architecture fixtures             | invented architecture-flavored labels (§31) | **0 accepted / 0 needs_review** on all 6                                                                                                                |
+| Architecture own-suite P/R                    | 1.0 / 1.0 (§31)                             | **1.0 / 1.0** (untouched worker)                                                                                                                        |
+| Architecture authz-bleed on Security fixtures | N/A                                         | **ok** (no ownership/IDOR labels); note: Architecture may still emit non-authz `layering_violation` on `ops_shell`/`path_traversal` — out of scope here |
 
 Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_bleed_fix_20260801.json`.
 
@@ -778,6 +778,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 **Result:** Prompt section `INSUFFICIENT STRUCTURE`: stdlib import ≠ layering/dependency evidence; no identifiable project layer → `has_issues=false` for those claim types. Deterministic `is_insufficient_structure_claim`: if the target source has **no first-party imports** (only stdlib / none), drop `layering_violation` / `dependency_direction` — structural surface check, not a growing phrase blocklist (models were inventing "service layer" in suggested_fix to dodge text markers). Real architecture fixtures keep first-party imports → survive. Offline two-sided tests in `tests/test_architecture_worker.py` (31 passed). Also added native `openai` provider in `app/llm.py` for cross-provider checks.
 
 **Manual verify (2026-08-01, openai/gpt-4o-mini):**
+
 - `ops_shell.py` / `path_traversal.py` → Architecture **0 accepted** (LLM still claims issues; filter drops them)
 - `checkout_handler.py` → `layering_violation` kept
 - `low_level_persistence_client.py` → real upward-dependency finding kept
@@ -788,12 +789,13 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 34. Failure-mode harden (LLM 429 + Semgrep network noise)
 
-**Tool:** Cursor (build chat) · **Date:** 2026-08-02 / verified 2026-08-03  
+**Tool:** Cursor (build chat) · **Date:** 2026-08-02 / verified 2026-08-03
 **Goal:** Two personally hit failure modes only — Groq TPD 429 mid-benchmark; §21 Semgrep DNS dumping raw traceback into the security panel.
 
 **Result:** `LLMRateLimitedError` at `chat()` → hook/audit `skipped — rate limited` → callers (`agent` logic-review, `workers/common` tool loop) skip and continue. Semgrep network/DNS stderr classified to short `Semgrep scan failed: network error, falling back to logic-review` (fallback behavior unchanged). Unit tests in `tests/test_llm.py` + `tests/test_scanner_resilience.py`. Commit `575029d`.
 
 **Independent verify (2026-08-03):**
+
 - pytest: `test_chat_rate_limit_*`, `test_logic_review_degrades_on_rate_limit`, full `test_scanner_resilience.py` (+ hooks formatting suite) → **15 passed**
 - Forced path (patch, not live burn): `ScanError(network message)` → `review_code` sets `static_scan_error` to the short string; `_display_report` shows that line in the security header; no `Traceback`/`getaddrinfo` in panel. Forced `LLMRateLimitedError` on `assess_logic_review` → summary `skipped — rate limited`, review_code completes without traceback abort.
 - Happy-path live CLI `notes_idor.py` still works (Security IDOR + memory lesson-1); Architecture 0 accepted but panel body briefly leaked pre-filter claim text — tracked as §36.
@@ -806,7 +808,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 35. CLI live-trace readability (Rich stderr)
 
-**Tool:** Cursor (build chat) · **Date:** 2026-08-03  
+**Tool:** Cursor (build chat) · **Date:** 2026-08-03
 **Goal:** Make `[agent]` / `[tool]` mid-run stderr scannable for demos — formatting only.
 
 **Result:** Rich color by line type (cyan agent / magenta tool), dim HH:MM:SS on live stderr; full ISO kept in file log. Padded agent/tool columns. `tests/test_hooks_formatting.py`. No change to what is logged.
@@ -817,7 +819,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 36. Architecture clean-panel leaked pre-filter claim
 
-**Tool:** Cursor (build chat) · **Date:** 2026-08-03  
+**Tool:** Cursor (build chat) · **Date:** 2026-08-03
 **Goal:** Architecture header said clean / 0 accepted while the green panel body still showed the LLM’s dropped ownership/layering claim.
 
 **Cause:** `run_architecture_worker` kept the LLM `summary` after filters emptied `structured_findings`; that string became `report["message"]` / panel body.
@@ -832,7 +834,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 37. Real-code smoke (external OSS files) + Windows CLI encoding crash
 
-**Tool:** Cursor (build chat) · **Date:** 2026-08-03  
+**Tool:** Cursor (build chat) · **Date:** 2026-08-03
 **Goal:** Qualitative smoke on 3–5 real OSS Python files (not fixtures); report only, no inline fixes.
 
 **What ran:** 5 files under `smoke_test_external/` (werkzeug security, django crypto, requests exceptions, itsdangerous encoding, tqdm utils). Full CLI review each.
@@ -847,7 +849,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 38. Architecture sibling context — require explicit package
 
-**Tool:** Cursor / Sol · **Date:** 2026-08-03 · **Commit:** `0f72d5b`  
+**Tool:** Cursor / Sol · **Date:** 2026-08-03 · **Commit:** `0f72d5b`
 **Goal:** Co-located unrelated OSS files were attached as `same_package` and justified invented layering.
 
 **Result:** Attach directory siblings only when `__init__.py` exists. Import-linked + reverse-caller context unchanged. Isolation: 0 related / 0 accepted layering on `requests_exceptions.py`. Groq Architecture suite stayed 1.0/1.0.
@@ -856,7 +858,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 39. Architecture structural findings — require cited resolved project edge
 
-**Tool:** Cursor / Sol · **Date:** 2026-08-03 · **Commit:** `87bf69d`  
+**Tool:** Cursor / Sol · **Date:** 2026-08-03 · **Commit:** `87bf69d`
 **Goal:** Isolated Django/Werkzeug still accepted layering — old filter treated any non-stdlib/relative import as “enough structure,” even when evidence cited `django.*` or `sys.stdout`.
 
 **Result:** `ImportFact` + `classify_imports()` (stdlib / resolved_project / unresolved_external). Drop `layering_violation` / `dependency_direction` unless evidence names a resolved project import edge. Django self-imports, Werkzeug `sys.stdout`+unresolved `.repr`, and stdlib claims with unrelated project imports drop; `checkout_handler` / `low_level_persistence_client` kept.
@@ -867,7 +869,7 @@ Results: `security_arch_bleed_fix_20260801.json`, `architecture_after_security_b
 
 ## 40. Security coverage semantics (additive + inconclusive)
 
-**Tool:** Cursor · **Date:** 2026-08-03 · **Pending commit**  
+**Tool:** Cursor · **Date:** 2026-08-03 · **Pending commit**
 **Goal:** (1) Semgrep hit skipped logic-review; (2) rate-limit looked like clean; (3) truncation silent.
 
 **Result:** `review_code` runs Semgrep + logic-review additively on reviewable files. Rate-limit/hard chat failure → `inconclusive=True`, `no_issues=False`, `logic_review_status="inconclusive"`, CLI yellow “Review incomplete”. Report metadata: `source_truncated`, `source_truncated_note`, `used_logic_review`. 151 tests (`tests/test_security_coverage.py`).
@@ -891,10 +893,11 @@ Ran once, no tuning: offline (Semgrep-only) scored 0/4 recall — none of these 
 
 ## 42. Stretch: human-gated closed-loop Chroma memory
 
-**Tool:** Cursor (Grok mentoring chat + build agent) · **Date:** 2026-08-05 ~18:00 PKT · **Branch:** `feat/human-gated-chroma-memory`  
-**Goal:** Close the loop Awais wanted without restoring unsupervised AI self-save. Human ACCEPT already wrote SQLite verified outcomes; Chroma stayed seed-only. Stretch = promote a concise lesson into Chroma **only after explicit human accept**, so future MemoryWorker/`search_memory` retrieval can benefit from confirmed judgment.
+**Tool:** Cursor (Grok mentoring chat + build agent) · **Date:** 2026-08-05 ~18:00 PKT · **Branch:** `feat/human-gated-chroma-memory`
+**Goal:** Close the loop mentor wanted without restoring unsupervised AI self-save. Human ACCEPT already wrote SQLite verified outcomes; Chroma stayed seed-only. Stretch = promote a concise lesson into Chroma **only after explicit human accept**, so future MemoryWorker/`search_memory` retrieval can benefit from confirmed judgment.
 
 **What landed:**
+
 - `record_finding_decision` (shared by CLI `decide` + `POST /outcomes`): REJECT → SQLite only; ACCEPT → SQLite always, then `_promote_accepted_lesson` → `save_finding`
 - Lesson payload from structured finding only (type / truncated evidence / suggested fix / normalized path). No human reason, raw source, or prompts. Stable id `human-accept-r{review_id}-i{index}` for idempotent retries
 - `save_finding` now skips when that **id already exists** (previously minted a suffix id); near-duplicate distance guard kept
@@ -903,5 +906,123 @@ Ran once, no tuning: offline (Semgrep-only) scored 0/4 recall — none of these 
 - Docs: README / ARCHITECTURE / DEMO_STUDY — Chroma = seed + human-accepted lessons; rejects remain SQLite-only
 - Tests: +4 focused cases; full suite **164 passed**
 
-**Review notes:** Gate “accepted” (≥80) ≠ human accept. This stretch keys off human ACCEPT only. Still not “AI learns by itself” — it learns from *my* confirmed decisions. Next for Week 8: rehearse/demo video; other stretches (webhook, Bandit) remain optional and droppable.
+**Review notes:** Gate “accepted” (≥80) ≠ human accept. This stretch keys off human ACCEPT only. Still not “AI learns by itself” — it learns from _my_ confirmed decisions. Docs refreshed 2026-08-05 evening (`DEMO.md` / README / ARCHITECTURE) so the walkthrough no longer claims closed-loop is future-only. Remaining Week 8 work: Mentor follow-up email, rehearse, record.
 
+---
+
+## 43. Multi-file directory review (bounded parallel Supervisors)
+
+**Tool:** Cursor (build agent) · **Date:** 2026-08-07 ~18:20 PKT
+**Goal:** Mentor asked for multi-file / “repo” coverage without inventing a meta-agent. Same `supervise_review` per file; thread pool + deterministic merge only.
+
+**What landed:**
+
+- CLI: `review <dir> --max-files N` (default 10) · `--workers N` (default 2; `1` = sequential)
+- Discover `.py`, skip junk dirs, sort relative paths, print selected list, aggregate counts in input order
+- Concurrency: connection-per-op SQLite, busy timeout, WAL, serialized schema + Chroma init (race found under parallel load and fixed)
+- Single-file path unchanged; no API/dashboard directory submit in this step
+- Tests: `tests/test_multifile_review.py`; suite grew (later §44 → 180)
+
+**Review notes:** Parallelism increases rate-limit risk — keep `--workers` small for demos. No LLM merge across files.
+
+---
+
+## 44. Multi-file selection hardening (default skip `__init__.py` + filters)
+
+**Tool:** Cursor (Grok mentoring + build agent) · **Date:** 2026-08-07 ~19:20 PKT
+**Goal:** Capped slots were wasted on empty package markers (alphabetical `__init__.py` first). Encode deliberate eligibility without an LLM “importance” ranker.
+
+**Policy:**
+
+1. Discover regular `.py`; skip junk dirs; no directory symlink follow
+2. Optional `--include` / `--exclude` globs (POSIX relative, `**` ok)
+3. Default **drop every `__init__.py`** (low expected signal under hard cap — not “never buggy”); `--include-init` re-includes
+4. Drop trivial modules (empty / comments / shebang / encoding / one docstring / bare `pass`) via AST; decode/parse failures stay eligible
+5. Sort relative POSIX path → then `--max-files`
+
+**Verified (2026-08-07):** focused multifile **14 passed, 1 skipped**; full suite **180 passed, 1 skipped**. Default `benchmark/fixtures --max-files 4` selects `checkout_handler`, `clean_price_formatter`, `high_level_order_workflow`, `inventory_data_store` — no `__init__.py`.
+
+**Review notes:** Single-file `review <path>` unchanged. Next: confidence-bucket precision (persist confidence in results JSON + REPORT section; name provider); then slides / DEMO update / record.
+
+---
+
+## 45. Claimed-but-unverified Architecture honesty + quiet multi-file CLI
+
+**Tool:** Cursor (Grok mentoring + build) · **Date:** 2026-08-07 evening → commit `f028ad8`
+**Goal:** Audit trail was saying “layering violation” while the panel said green clean — panelist-visible trust bug. Also multi-file stderr was unreadable under parallel workers.
+
+**What landed:**
+
+- Architecture: when `has_issues` but every structured row is filtered / empty → `claim_unverified` + yellow **Evidence bar not met** (not “No architecture issues found.”). Filters untouched.
+- Schema: `ReviewResult.claim_status="unverified"`; dashboard FindingsView empty-state matches
+- Multi-file: quiet default (`running`/`done` + summary); `--verbose` restores traces; file prefix when `--workers > 1`
+- Windows Click `**/` include-glob expansion fixed (`windows_expand_args=False` + path normalize)
+
+**Learning:** Parallelism was not the Architecture FN root cause — OpenAI often emits issues that fail the evidence bar; Groq planted path still accepts. Softening filters was the wrong chase; honesty reporting was the product fix.
+
+---
+
+## 46. Confidence-bucket precision
+
+**Tool:** Cursor (build) · **Date:** 2026-08-08 · Commit `aa2a550`
+**Goal:** “On what criteria is confidence authentic?” — method + measurement, not detection tuning.
+
+**What landed:**
+
+- Runners persist per-finding `confidence` + `detection_method` on `predictions[]` and `per_file[*].confidence_records` (accepted **and** needs_review)
+- `app/benchmark_confidence_buckets.py` — buckets `<70` / `70-79` / `80-89` / `90-100`, precision per bucket vs each file’s own GT
+- `REPORT.md` §5 — provider-labeled table; small-N honesty; `detection_method` as second signal (`ops_shell` Semgrep + LLM both @ 90)
+
+**First planted/real-world measurement:** every accepted finding clustered at **90**; lower buckets empty. Criteria = method exists; cross-bucket discrimination not yet shown. Weather-forecaster framing in `DEMO_STUDY.md` §8b.
+
+---
+
+## 47. Qualitative OSS confidence re-measure (OpenAI) + Groq A/B
+
+**Tool:** Cursor (build) · **Date:** 2026-08-08
+**Cohort:** fixed **10** smoke files (`smoke_test_external/` ×5 + `smoke_test_security/` ×5) — **not** the 8 scored `benchmark/real_world/` CVE files (those already have GT; Claude’s “~15–18” was that mix).
+
+**OpenAI §6 (`qualitative_oss_20260808.json`):** Security 0 findings; Architecture 3× `naming_convention` @ 79 (needs_review); 5 claim_unverified; 12 zero-finding. Old accepted layering FPs **not reproduced** on this cohort/run. No P/R claimed (no exhaustive GT).
+
+**Contrast with §5:** planted suites clustered at 90; this OSS cohort produced a natural **70–79** below-gate cluster.
+
+_(Groq OSS §6b — if landed in parallel chat, keep provider rows separate; same no-P/R rule.)_
+
+---
+
+## 48. Provider A/B: real-world Groq + Security buckets Groq + Architecture buckets OpenAI
+
+**Tool:** Cursor (build) · **Date:** 2026-08-08 evening · **Not committed yet**
+**Goal:** Slide-ready provider parity; fix §5 Security buckets vs §1 Groq P/R inconsistency; document Architecture OpenAI gap in bucket form.
+
+| Run                  | Provider | Model                   | Artifact                               |
+| -------------------- | -------- | ----------------------- | -------------------------------------- |
+| Real-world CVE       | groq     | llama-3.3-70b-versatile | `ab_realworld_groq_20260808.json`      |
+| Planted Security     | groq     | llama-3.3-70b-versatile | `ab_security_groq_20260808.json`       |
+| Planted Architecture | openai   | gpt-4o-mini             | `ab_architecture_openai_20260808.json` |
+
+**Results (temp 0 confirmed):**
+
+- Real-world P/R: OpenAI **1.0/1.0** and Groq **1.0/1.0** (N=4) — strongest cross-provider generalization evidence
+- Confidence buckets: still almost entirely **90–100** (real-world Groq used **100**); lower buckets empty on these scored suites
+- Architecture OpenAI: 1 TP + `checkout_handler` **claim_unverified** → FN (known gap)
+- Security Groq A/B: headline **recall 0.75** because `path_traversal` message was `inconclusive — rate limited`, not a quiet miss
+
+**Slide bullets:** dual-provider real-world 1.0/1.0; Architecture Groq vs OpenAI evidence-bar; confidence still clustered high on scored suites; every bucket N≤5.
+
+---
+
+## 49. Benchmark scorer conflates inconclusive with FN — FIXED
+
+**Date flagged:** 2026-08-08 · **Source:** Security Groq A/B `path_traversal` rate-limit
+**Bug:** Product correctly marked `inconclusive`; `evaluate()` / runners treated empty predictions + expected GT as a normal **FN**. Architecture had no `inconclusive` flag at all (rate-limit looked like clean).
+
+**Fix (uncommitted as of log):** persist `per_file[*].inconclusive` / `coverage_status`; exclude inconclusive fixtures from **both** GT denominator and predictions (avoids FN→FP flip on partial static hits); Architecture rate-limit → real `inconclusive`. Same pattern on Security + real_world + Architecture runners. Tests green (~205).
+
+**Clean Groq Security re-runs (new API key / account):**
+
+- `ab_security_groq_clean_20260809.json` → **P=1.0 / R=1.0** (0 inconclusive)
+- Independent confirm `ab_security_groq_clean2_20260809.json` → **P=1.0 / R=1.0** (0 inconclusive); buckets 90–100: 4/4 (three @100, one @90 static)
+- Old `ab_security_groq_20260808.json` (0.75) **kept** as evidence of the conflation bug, not cited as model recall
+
+**Hard stop benchmarking.** Next: slides / ARCHITECTURE.md panel polish / DEMO refresh / rehearse / record.

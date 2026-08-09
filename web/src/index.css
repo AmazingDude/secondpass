@@ -681,9 +681,48 @@ a {
 }
 
 .job-stage-mark {
-  width: 0.75rem;
-  text-align: center;
+  width: 1rem;
+  height: 1rem;
   flex-shrink: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  line-height: 0;
+}
+
+.job-stage-icon {
+  width: 0.85rem;
+  height: 0.85rem;
+  display: block;
+  flex-shrink: 0;
+}
+
+.job-stage-icon--idle {
+  opacity: 0.55;
+}
+
+.job-stage-icon--spin {
+  animation: spin 0.7s linear infinite;
+}
+
+.submit-complete-banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem 1rem;
+  margin: 0.85rem var(--panel-pad-x) 0;
+  padding: 0.75rem 0.9rem;
+  border: 1px solid color-mix(in srgb, var(--severity-low) 35%, var(--surface-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--severity-low) 8%, var(--surface));
+  color: var(--text-primary);
+  font-size: var(--type-ui);
+  line-height: 1.4;
+}
+
+.submit-complete-banner strong {
+  font-weight: 650;
 }
 
 .submit-progress-card .agent-timeline {
@@ -764,12 +803,23 @@ a {
 }
 
 .audit-log-row-detail {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.3rem;
   width: 100%;
   padding-left: 1.35rem;
   margin-top: 0.05rem;
   color: #7c8aa0;
   font-size: var(--type-micro);
   line-height: 1.5;
+}
+
+.audit-log-detail-icon {
+  width: 0.7rem;
+  height: 0.7rem;
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+  opacity: 0.85;
 }
 
 .audit-tok-kind {
@@ -846,7 +896,8 @@ a {
 
 .agent-timeline-rail {
   position: absolute;
-  left: 10px;
+  left: calc(1.35rem / 2);
+  transform: translateX(-50%);
   top: 1.55rem;
   bottom: -0.35rem;
   width: 1px;
@@ -856,7 +907,12 @@ a {
 .agent-timeline-dot-slot {
   position: absolute;
   left: 0;
+  /* Match card top padding so the circle centers on the title row. */
   top: 0.55rem;
+  display: flex;
+  align-items: center;
+  width: 1.35rem;
+  height: 1.35rem;
 }
 
 .agent-timeline-card {
@@ -920,7 +976,7 @@ a {
 .agent-timeline-child {
   display: flex;
   align-items: flex-start;
-  gap: 0.45rem;
+  gap: 0.5rem;
   margin-bottom: 0.35rem;
 }
 
@@ -934,6 +990,7 @@ a {
 
 .agent-timeline-child-label {
   font-size: var(--type-small);
+  line-height: 1.35;
   color: var(--text-primary);
 }
 
@@ -942,22 +999,32 @@ a {
 }
 
 .agent-dot {
-  display: grid;
-  place-items: center;
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  flex-shrink: 0;
+  box-sizing: border-box;
   width: 1.35rem;
   height: 1.35rem;
-  border-radius: 999px;
-  border: 1px solid var(--surface-border);
+  border-radius: 50%;
+  border: 1.5px solid var(--surface-border);
   background: var(--surface);
   color: #fff;
+  line-height: 0;
 }
 
 .agent-dot--sm {
-  width: 0.85rem;
-  height: 0.85rem;
+  width: 1rem;
+  height: 1rem;
+  border-width: 1.5px;
 }
 
 .agent-dot--active {
+  border-style: solid;
+}
+
+.agent-dot--filled {
   border-style: solid;
 }
 
@@ -971,13 +1038,28 @@ a {
 }
 
 .agent-dot-icon {
-  width: 0.75rem;
-  height: 0.75rem;
+  width: 0.7rem;
+  height: 0.7rem;
+  display: block;
+  flex-shrink: 0;
 }
 
 .agent-dot-icon--sm {
-  width: 0.5rem;
-  height: 0.5rem;
+  width: 0.55rem;
+  height: 0.55rem;
+  display: block;
+  flex-shrink: 0;
+}
+
+.agent-dot--filled .agent-dot-icon,
+.agent-dot--filled .agent-dot-icon--sm {
+  /* Lucide Check sits slightly high optically in a filled circle. */
+  transform: translateY(0.5px);
+}
+
+.agent-timeline-child > .agent-dot {
+  /* Center the 1rem circle against the mono title's first line box. */
+  margin-top: 0.18rem;
 }
 
 .agent-dot--active .agent-dot-icon,

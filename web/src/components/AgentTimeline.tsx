@@ -64,9 +64,7 @@ export function AgentTimeline({
                         borderColor: `color-mix(in srgb, ${color} 45%, var(--surface-border))`,
                         background: `color-mix(in srgb, ${color} 8%, var(--surface))`,
                       }
-                    : state === "warn"
-                      ? undefined
-                      : undefined
+                    : undefined
                 }
               >
                 <div className="agent-timeline-card-head">
@@ -152,7 +150,11 @@ function StepDot({
   skipped?: boolean;
   small?: boolean;
 }) {
-  const sizeClass = small ? "agent-dot agent-dot--sm" : "agent-dot";
+  const sizeClass = small
+    ? "agent-dot agent-dot--sm"
+    : "agent-dot";
+  const iconClass = small ? "agent-dot-icon--sm" : "agent-dot-icon";
+
   if (state === "active") {
     return (
       <span
@@ -160,13 +162,10 @@ function StepDot({
         style={{
           borderColor: color,
           background: `color-mix(in srgb, ${color} 12%, transparent)`,
+          color,
         }}
       >
-        <Loader2
-          className={small ? "agent-dot-icon--sm" : "agent-dot-icon"}
-          style={{ color }}
-          aria-hidden
-        />
+        <Loader2 className={iconClass} strokeWidth={2.5} aria-hidden />
       </span>
     );
   }
@@ -176,13 +175,9 @@ function StepDot({
     return (
       <span
         className={`${sizeClass} agent-dot--filled`}
-        style={{ background: tone }}
+        style={{ background: tone, borderColor: tone, color: "#fff" }}
       >
-        <Icon
-          className={small ? "agent-dot-icon--sm" : "agent-dot-icon"}
-          strokeWidth={3}
-          aria-hidden
-        />
+        <Icon className={iconClass} strokeWidth={2.75} aria-hidden />
       </span>
     );
   }
@@ -191,10 +186,7 @@ function StepDot({
       className={`${sizeClass} agent-dot--idle ${skipped ? "is-skipped" : ""}`}
     >
       {skipped ? (
-        <Minus
-          className={small ? "agent-dot-icon--sm" : "agent-dot-icon"}
-          aria-hidden
-        />
+        <Minus className={iconClass} strokeWidth={2.5} aria-hidden />
       ) : null}
     </span>
   );
