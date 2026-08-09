@@ -1,4 +1,4 @@
-/** Typed client for existing FastAPI endpoints (no new routes). */
+/** Typed client for the local FastAPI backend. */
 
 const API_BASE =
   (import.meta.env.VITE_API_BASE as string | undefined)?.replace(/\/$/, "") ||
@@ -49,10 +49,13 @@ export type JobPayload = {
   error: string | null;
   created_at: string;
   updated_at: string;
-  persisted_review_ids?: {
-    security?: number | null;
-    architecture?: number | null;
-  };
+  options?: ReviewOptions;
+  persisted_review_ids?:
+    | {
+        security?: number | null;
+        architecture?: number | null;
+      }
+    | number[];
   summary?: Record<string, unknown>;
   result?: Record<string, unknown>;
 };
@@ -75,6 +78,36 @@ export type JobAuditPayload = {
   events: AuditEvent[];
 };
 
+function formatApiDetail(detail: unknown, fallback: string): string {
+  if (typeof detail === "string" && detail.trim()) return detail;
+  if (Array.isArray(detail)) {
+    const parts = detail
+      .map((item) => {
+        if (typeof item === "string") return item;
+        if (item && typeof item === "object") {
+          const row = item as { msg?: unknown; loc?: unknown };
+          const msg = typeof row.msg === "string" ? row.msg : null;
+          if (!msg) return null;
+          const loc = Array.isArray(row.loc)
+            ? row.loc
+                .filter((part) => typeof part === "string" || typeof part === "number")
+                .join(".")
+            : "";
+          return loc ? `${loc}: ${msg}` : msg;
+        }
+        return null;
+      })
+      .filter((part): part is string => Boolean(part));
+    if (parts.length) return parts.join("; ");
+  }
+  if (detail && typeof detail === "object") {
+    const row = detail as { msg?: unknown; message?: unknown };
+    if (typeof row.msg === "string" && row.msg.trim()) return row.msg;
+    if (typeof row.message === "string" && row.message.trim()) return row.message;
+  }
+  return fallback;
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -84,23 +117,59 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     },
   });
   if (!response.ok) {
-    let detail = response.statusText;
+    let detail = response.statusText || `HTTP ${response.status}`;
     try {
-      const body = (await response.json()) as { detail?: string };
-      if (body.detail) detail = body.detail;
+      const body = (await response.json()) as { detail?: unknown };
+      detail = formatApiDetail(body.detail, detail);
     } catch {
       /* ignore */
     }
-    throw new Error(detail || `HTTP ${response.status}`);
+    throw new Error(detail);
   }
   return (await response.json()) as T;
 }
 
-export function submitReview(path: string) {
+export type ReviewOptions = {
+  workers: number;
+  max_files: number;
+  include_init: boolean;
+  include: string[];
+  exclude: string[];
+};
+
+export type ReviewPreview = {
+  path: string;
+  kind: "file" | "directory";
+  selected_count: number;
+  eligible_count: number;
+  discovered_count: number;
+  capped: boolean;
+  files: string[];
+  skipped?: {
+    init: number;
+    trivial: number;
+    include: number;
+    exclude: number;
+    junk_directories: number;
+  };
+};
+
+export function submitReview(path: string, options?: ReviewOptions) {
   return request<{ job_id: string }>("/reviews", {
     method: "POST",
-    body: JSON.stringify({ path }),
+    body: JSON.stringify({ path, ...options }),
   });
+}
+
+export function previewReview(path: string, options: ReviewOptions) {
+  const query = new URLSearchParams({
+    path,
+    max_files: String(options.max_files),
+    include_init: String(options.include_init),
+  });
+  options.include.forEach((pattern) => query.append("include", pattern));
+  options.exclude.forEach((pattern) => query.append("exclude", pattern));
+  return request<ReviewPreview>(`/reviews/preview?${query.toString()}`);
 }
 
 export function getJob(jobId: string) {
@@ -132,6 +201,15 @@ export type OutcomePayload = {
   finding: Finding;
 };
 
+export type MemoryPromotion = {
+  status: "saved" | "skipped" | "error" | string;
+  lesson_id?: string | null;
+  matched_id?: string | null;
+  reason?: string | null;
+  distance?: number | null;
+  error?: string | null;
+};
+
 export function listOutcomes(filePath: string) {
   return request<{ file_path: string; outcomes: OutcomePayload[] }>(
     `/outcomes?file_path=${encodeURIComponent(filePath)}`,
@@ -145,10 +223,13 @@ export function postOutcome(body: {
   reason: string;
   linked_fix_commit?: string | null;
 }) {
-  return request<OutcomePayload>("/outcomes", {
+  return request<OutcomePayload & { memory_promotion?: MemoryPromotion | null }>(
+    "/outcomes",
+    {
     method: "POST",
     body: JSON.stringify(body),
-  });
+    },
+  );
 }
 
 export { API_BASE };

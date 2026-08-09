@@ -1,5 +1,11 @@
 import { useCallback, useEffect, useMemo, useState, type FormEvent } from "react";
 import {
+  CheckCircle2,
+  Database,
+  Diamond,
+  TriangleAlert,
+} from "lucide-react";
+import {
   getReview,
   listOutcomes,
   listReviews,
@@ -8,10 +14,21 @@ import {
   type ReviewPayload,
 } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
+import { ReviewCombobox } from "../components/ReviewCombobox";
 
 type Props = {
   initialReviewId?: number | null;
 };
+
+type OutcomeNotice = {
+  tone: "success" | "warning";
+  title: string;
+  detail: string;
+};
+
+function fileName(path: string) {
+  return path.replaceAll("\\", "/").split("/").pop() || path;
+}
 
 export function MemoryView({ initialReviewId = null }: Props) {
   const [reviews, setReviews] = useState<ReviewPayload[]>([]);
@@ -23,7 +40,7 @@ export function MemoryView({ initialReviewId = null }: Props) {
   const [outcomes, setOutcomes] = useState<OutcomePayload[]>([]);
   const [listError, setListError] = useState<string | null>(null);
   const [formError, setFormError] = useState<string | null>(null);
-  const [formOk, setFormOk] = useState<string | null>(null);
+  const [formOk, setFormOk] = useState<OutcomeNotice | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [loadingReview, setLoadingReview] = useState(false);
 
@@ -95,7 +112,10 @@ export function MemoryView({ initialReviewId = null }: Props) {
     () =>
       reviews.map((r) => ({
         id: r.id,
-        label: `#${r.id} · ${r.worker_name} · ${r.file_path}`,
+        workerName: r.worker_name,
+        filePath: r.file_path,
+        fileName: fileName(r.file_path),
+        createdAt: r.created_at,
       })),
     [reviews],
   );
@@ -115,17 +135,13 @@ export function MemoryView({ initialReviewId = null }: Props) {
     }
     setSubmitting(true);
     try {
-      await postOutcome({
+      const outcome = await postOutcome({
         review_id: review.id,
         index: findingIndex,
         accepted: decision === "accept",
         reason: trimmed,
       });
-      setFormOk(
-        decision === "accept"
-          ? "Recorded accepted outcome."
-          : "Recorded rejected outcome.",
-      );
+      setFormOk(formatOutcomeStatus(outcome.accepted, outcome.memory_promotion));
       setReason("");
       setDecision(null);
       await refreshOutcomes(review.file_path);
@@ -149,29 +165,29 @@ export function MemoryView({ initialReviewId = null }: Props) {
       <div className="decide-layout">
         <form className="card stack-gap" onSubmit={handleSubmit}>
           <div>
-            <label className="field-label" htmlFor="memory-review">
-              Review
-            </label>
-            <select
-              id="memory-review"
-              className="field-select"
-              value={reviewId === "" ? "" : String(reviewId)}
-              onChange={(e) => {
-                const v = e.target.value;
-                setReviewId(v ? Number(v) : "");
-              }}
+            <ReviewCombobox
+              label="Review result"
+              options={reviewOptions}
+              value={reviewId}
+              onChange={setReviewId}
               disabled={reviews.length === 0}
-            >
-              {reviews.length === 0 ? (
-                <option value="">No reviews available</option>
-              ) : (
-                reviewOptions.map((opt) => (
-                  <option key={opt.id} value={opt.id}>
-                    {opt.label}
-                  </option>
-                ))
-              )}
-            </select>
+            />
+            {review ? (
+              <div className="selected-option-detail">
+                <div>
+                  <span className="badge badge-neutral">
+                    {review.worker_name}
+                  </span>
+                  <span className="outcome-meta">
+                    Review #{review.id} ·{" "}
+                    {new Date(review.created_at).toLocaleString()}
+                  </span>
+                </div>
+                <p className="mono path-wrap" title={review.file_path}>
+                  {review.file_path}
+                </p>
+              </div>
+            ) : null}
           </div>
 
           {loadingReview ? (
@@ -191,7 +207,7 @@ export function MemoryView({ initialReviewId = null }: Props) {
             <>
               <div>
                 <label className="field-label" htmlFor="memory-finding">
-                  Finding
+                  Finding to decide
                 </label>
                 <select
                   id="memory-finding"
@@ -203,18 +219,33 @@ export function MemoryView({ initialReviewId = null }: Props) {
                   }}
                 >
                   {findings.map((finding, index) => (
-                    <option key={`${index}-${finding.finding_type}`} value={index}>
-                      [{index}] {finding.finding_type} · {finding.confidence}%
+                    <option
+                      key={`${index}-${finding.finding_type}`}
+                      value={index}
+                    >
+                      {index + 1}. {finding.finding_type} · {finding.confidence}%
+                      · {finding.detection_method}
                     </option>
                   ))}
                 </select>
+                {selected ? (
+                  <div className="finding-selection-summary">
+                    <span className="badge badge-accepted">
+                      {selected.confidence}% confidence
+                    </span>
+                    <span className="badge badge-neutral">
+                      {selected.detection_method}
+                    </span>
+                    <strong>{selected.finding_type}</strong>
+                  </div>
+                ) : null}
               </div>
 
               {selected ? (
                 <div>
                   <p className="section-label">Evidence</p>
                   <div className="evidence-callout" role="note">
-                    <span aria-hidden="true">◈</span>
+                    <Diamond className="evidence-callout-icon" aria-hidden />
                     <div style={{ flex: 1, minWidth: 0 }}>
                       <CodeBlock
                         code={selected.evidence}
@@ -249,12 +280,25 @@ export function MemoryView({ initialReviewId = null }: Props) {
                     type="button"
                     className={[
                       "btn",
-                      decision === "reject" ? "btn-reject is-selected" : "btn-ghost",
+                      decision === "reject"
+                        ? "btn-reject is-selected"
+                        : "btn-ghost",
                     ].join(" ")}
                     onClick={() => setDecision("reject")}
                   >
                     Reject
                   </button>
+                </div>
+                <div className="memory-save-note" role="note">
+                  <Database aria-hidden />
+                  <div>
+                    <strong>What gets saved?</strong>
+                    <p>
+                      Accept writes SQLite always and may promote a concise
+                      Chroma lesson. Reject writes SQLite only and never updates
+                      Chroma. Prior outcomes stay append-only.
+                    </p>
+                  </div>
                 </div>
               </div>
 
@@ -292,7 +336,22 @@ export function MemoryView({ initialReviewId = null }: Props) {
           ) : null}
 
           {formError ? <p className="error-text">{formError}</p> : null}
-          {formOk ? <p className="success-text">{formOk}</p> : null}
+          {formOk ? (
+            <div
+              className={`outcome-notice outcome-notice--${formOk.tone}`}
+              role="status"
+            >
+              {formOk.tone === "success" ? (
+                <CheckCircle2 aria-hidden />
+              ) : (
+                <TriangleAlert aria-hidden />
+              )}
+              <div>
+                <strong>{formOk.title}</strong>
+                <p>{formOk.detail}</p>
+              </div>
+            </div>
+          ) : null}
         </form>
 
         <div className="card">
@@ -305,7 +364,9 @@ export function MemoryView({ initialReviewId = null }: Props) {
             {review?.file_path || "Select a review"}
           </p>
           {review && outcomes.length === 0 ? (
-            <p className="empty-detail">No outcomes recorded for this file yet.</p>
+            <p className="empty-detail">
+              No outcomes recorded for this file yet.
+            </p>
           ) : null}
           {outcomes.map((outcome) => (
             <article key={outcome.id} className="outcome-card">
@@ -344,3 +405,47 @@ export function MemoryView({ initialReviewId = null }: Props) {
   );
 }
 
+function formatOutcomeStatus(
+  accepted: boolean,
+  promotion?: {
+    status: string;
+    reason?: string | null;
+  } | null,
+): OutcomeNotice {
+  if (!accepted) {
+    return {
+      tone: "success",
+      title: "Rejected outcome recorded",
+      detail: "Saved to SQLite only. Rejects do not update Chroma.",
+    };
+  }
+  if (!promotion) {
+    return {
+      tone: "success",
+      title: "Accepted outcome recorded",
+      detail: "Saved to SQLite.",
+    };
+  }
+  if (promotion.status === "saved") {
+    return {
+      tone: "success",
+      title: "Accepted outcome recorded",
+      detail: "Saved to SQLite and promoted a lesson into Chroma.",
+    };
+  }
+  if (promotion.status === "skipped") {
+    return {
+      tone: "warning",
+      title: "Accepted outcome recorded",
+      detail: `Saved to SQLite. Chroma lesson skipped: ${
+        promotion.reason || "a near-duplicate already exists"
+      }.`,
+    };
+  }
+  return {
+    tone: "warning",
+    title: "Accepted outcome recorded",
+    detail:
+      "Saved to SQLite, but the Chroma lesson could not be saved after the outcome write.",
+  };
+}

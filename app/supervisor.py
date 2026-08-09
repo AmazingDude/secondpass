@@ -401,6 +401,7 @@ def supervise_review(
             STAGE_REVIEW_COMPLETE,
             worker_name="supervisor",
             detail={
+                "path": target,
                 "accepted_count": combined["summary"]["accepted_count"],
                 "needs_review_count": combined["summary"]["needs_review_count"],
                 "workers_run": combined["summary"]["workers_run"],

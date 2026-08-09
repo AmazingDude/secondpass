@@ -19,6 +19,7 @@ ReviewRunner = Callable[..., dict[str, Any]]
 class ReviewJob:
     job_id: str
     path: str
+    options: dict[str, Any] = field(default_factory=dict)
     status: JobStatus = "queued"
     error: str | None = None
     result: dict[str, Any] | None = None
@@ -29,6 +30,7 @@ class ReviewJob:
         payload: dict[str, Any] = {
             "job_id": self.job_id,
             "path": self.path,
+            "options": self.options,
             "status": self.status,
             "error": self.error,
             "created_at": self.created_at.isoformat(),
@@ -56,18 +58,76 @@ class JobStore:
         self._runner = runner or self._default_runner
 
     @staticmethod
-    def _default_runner(path: str, *, job_id: str | None = None) -> dict[str, Any]:
+    def _default_runner(
+        path: str,
+        *,
+        job_id: str | None = None,
+        workers: int = 2,
+        max_files: int = 10,
+        include_init: bool = False,
+        include: tuple[str, ...] = (),
+        exclude: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        target = Path(path)
         from app.supervisor import supervise_review
 
-        return supervise_review(path, job_id=job_id)
+        if target.is_file():
+            return supervise_review(path, job_id=job_id)
+
+        from app.multifile import review_python_files, select_python_files
+
+        selection = select_python_files(
+            target,
+            max_files=max_files,
+            include_init=include_init,
+            include=include,
+            exclude=exclude,
+        )
+        if not selection.selected:
+            raise ValueError("No eligible Python files matched the directory options")
+
+        aggregate = review_python_files(
+            selection.selected,
+            workers=workers,
+            review_one=lambda file_path: supervise_review(file_path, job_id=job_id),
+        )
+        aggregate["path"] = str(selection.root)
+        aggregate["mode"] = "directory"
+        aggregate["workers"] = workers
+        aggregate["selection"] = {
+            "selected_count": selection.selected_count,
+            "eligible_count": selection.eligible_count,
+            "discovered_count": selection.discovered_count,
+            "capped": selection.capped,
+            "include_init": selection.include_init,
+            "selected": selection.relative_selected(),
+        }
+        aggregate["persisted_review_ids"] = [
+            review_id
+            for item in aggregate["files"]
+            for review_id in (item["report"].get("persisted_review_ids") or {}).values()
+            if isinstance(review_id, int)
+        ]
+        aggregate["summary"] = {
+            "accepted_count": aggregate["accepted_count"],
+            "needs_review_count": aggregate["needs_review_count"],
+            "file_count": aggregate["file_count"],
+            "workers": workers,
+        }
+        return aggregate
 
     def set_runner(self, runner: ReviewRunner) -> None:
         """Override the review callable (tests inject a delayed mock)."""
         self._runner = runner
 
-    def submit(self, path: str) -> ReviewJob:
+    def submit(self, path: str, **options: Any) -> ReviewJob:
         target = str(Path(path).expanduser())
-        job = ReviewJob(job_id=str(uuid.uuid4()), path=target, status="queued")
+        job = ReviewJob(
+            job_id=str(uuid.uuid4()),
+            path=target,
+            options=dict(options),
+            status="queued",
+        )
         with self._lock:
             self._jobs[job.job_id] = job
         self._executor.submit(self._execute, job.job_id)
@@ -82,6 +142,7 @@ class JobStore:
             return ReviewJob(
                 job_id=job.job_id,
                 path=job.path,
+                options=dict(job.options),
                 status=job.status,
                 error=job.error,
                 result=job.result,
@@ -110,12 +171,15 @@ class JobStore:
         try:
             with self._lock:
                 path = self._jobs[job_id].path
-            result = self._call_runner(path, job_id)
+                options = dict(self._jobs[job_id].options)
+            result = self._call_runner(path, job_id, options)
             self._update(job_id, status="completed", result=result, error=None)
         except Exception as exc:  # noqa: BLE001 — surface as failed job status
             self._update(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
 
-    def _call_runner(self, path: str, job_id: str) -> dict[str, Any]:
+    def _call_runner(
+        self, path: str, job_id: str, options: dict[str, Any]
+    ) -> dict[str, Any]:
         """Pass job_id when the runner accepts it (default + new tests)."""
         import inspect
 
@@ -123,9 +187,16 @@ class JobStore:
             signature = inspect.signature(self._runner)
         except (TypeError, ValueError):
             return self._runner(path)
-        if "job_id" in signature.parameters:
-            return self._runner(path, job_id=job_id)
-        return self._runner(path)
+        accepts_kwargs = any(
+            parameter.kind is inspect.Parameter.VAR_KEYWORD
+            for parameter in signature.parameters.values()
+        )
+        kwargs = {
+            key: value
+            for key, value in {"job_id": job_id, **options}.items()
+            if accepts_kwargs or key in signature.parameters
+        }
+        return self._runner(path, **kwargs)
 
     def shutdown(self, *, wait: bool = False) -> None:
         self._executor.shutdown(wait=wait, cancel_futures=True)

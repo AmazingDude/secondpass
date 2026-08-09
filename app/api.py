@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel, Field
 
 from app.jobs import job_store
+from app.multifile import select_python_files
 from app.persistence import (
     DEFAULT_DB_PATH,
     get_review,
@@ -47,6 +48,11 @@ app.add_middleware(
 
 class ReviewSubmit(BaseModel):
     path: str = Field(..., min_length=1, description="File or directory to review.")
+    workers: int = Field(2, ge=1, description="Concurrent file reviews for directories.")
+    max_files: int = Field(10, ge=1, description="Maximum eligible files for directories.")
+    include_init: bool = False
+    include: list[str] = Field(default_factory=list)
+    exclude: list[str] = Field(default_factory=list)
 
 
 class JobAccepted(BaseModel):
@@ -99,12 +105,70 @@ def health() -> dict[str, str]:
 
 @app.post("/reviews", status_code=202, response_model=JobAccepted)
 def submit_review(body: ReviewSubmit) -> JobAccepted:
-    """Enqueue supervise_review on a worker thread; returns immediately."""
+    """Enqueue one file or a bounded directory review; returns immediately."""
     target = Path(body.path).expanduser()
     if not target.exists():
         raise HTTPException(status_code=400, detail=f"Path does not exist: {body.path}")
-    job = job_store.submit(str(target.resolve()))
+    job = job_store.submit(
+        str(target.resolve()),
+        workers=body.workers,
+        max_files=body.max_files,
+        include_init=body.include_init,
+        include=tuple(body.include),
+        exclude=tuple(body.exclude),
+    )
     return JobAccepted(job_id=job.job_id)
+
+
+@app.get("/reviews/preview")
+def preview_review(
+    path: str = Query(..., min_length=1),
+    max_files: int = Query(10, ge=1),
+    include_init: bool = False,
+    include: list[str] = Query(default=[]),
+    exclude: list[str] = Query(default=[]),
+) -> dict[str, Any]:
+    """Preview the exact deterministic file selection used by directory jobs."""
+    target = Path(path).expanduser()
+    if not target.exists():
+        raise HTTPException(status_code=400, detail=f"Path does not exist: {path}")
+    resolved = target.resolve()
+    if resolved.is_file():
+        return {
+            "path": str(resolved),
+            "kind": "file",
+            "selected_count": 1,
+            "eligible_count": 1,
+            "discovered_count": 1,
+            "capped": False,
+            "files": [resolved.name],
+        }
+    if not resolved.is_dir():
+        raise HTTPException(status_code=400, detail=f"Unsupported path type: {path}")
+
+    selection = select_python_files(
+        resolved,
+        max_files=max_files,
+        include_init=include_init,
+        include=include,
+        exclude=exclude,
+    )
+    return {
+        "path": str(selection.root),
+        "kind": "directory",
+        "selected_count": selection.selected_count,
+        "eligible_count": selection.eligible_count,
+        "discovered_count": selection.discovered_count,
+        "capped": selection.capped,
+        "files": selection.relative_selected(),
+        "skipped": {
+            "init": selection.skipped_init_count,
+            "trivial": selection.skipped_trivial_count,
+            "include": selection.skipped_include_count,
+            "exclude": selection.skipped_exclude_count,
+            "junk_directories": selection.junk_dirs_pruned,
+        },
+    }
 
 
 @app.get("/reviews/jobs/{job_id}")

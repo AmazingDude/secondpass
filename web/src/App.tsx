@@ -51,9 +51,9 @@ export default function App() {
   const handleCompleted = useCallback(async (job: JobPayload) => {
     setLoadError(null);
     const ids = job.persisted_review_ids || {};
-    const reviewIds = [ids.security, ids.architecture].filter(
-      (id): id is number => typeof id === "number",
-    );
+    const reviewIds = (
+      Array.isArray(ids) ? ids : [ids.security, ids.architecture]
+    ).filter((id): id is number => typeof id === "number");
     try {
       const reviews = await Promise.all(reviewIds.map((id) => getReview(id)));
       // Stay on Submit so the live timeline/audit trail remain visible;

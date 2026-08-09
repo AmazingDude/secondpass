@@ -1,5 +1,5 @@
 import { useMemo, useState } from "react";
-import { ArrowLeft } from "lucide-react";
+import { ArrowLeft, Diamond } from "lucide-react";
 import type { Finding, ReviewPayload } from "../api";
 import { CodeBlock } from "../components/CodeBlock";
 
@@ -75,13 +75,33 @@ export function FindingsView({
   const claimUnverified = reviews.some(
     (r) => r.review_result.claim_status === "unverified",
   );
-  const cleanWorkers = reviews.filter(
-    (r) =>
-      r.accepted_count === 0 &&
-      r.needs_review_count === 0 &&
-      r.review_result.coverage_status !== "inconclusive" &&
-      r.review_result.claim_status !== "unverified",
+  const workerNames = useMemo(() => {
+    const names: string[] = [];
+    for (const review of reviews) {
+      if (!names.includes(review.worker_name)) names.push(review.worker_name);
+    }
+    return names;
+  }, [reviews]);
+  const fileCount = useMemo(
+    () => new Set(reviews.map((review) => review.file_path)).size,
+    [reviews],
   );
+  /** One badge per worker that was clean on every file it reviewed. */
+  const cleanWorkerNames = useMemo(() => {
+    return workerNames.filter((name) => {
+      const theirs = reviews.filter((review) => review.worker_name === name);
+      return (
+        theirs.length > 0 &&
+        theirs.every(
+          (review) =>
+            review.accepted_count === 0 &&
+            review.needs_review_count === 0 &&
+            review.review_result.coverage_status !== "inconclusive" &&
+            review.review_result.claim_status !== "unverified",
+        )
+      );
+    });
+  }, [reviews, workerNames]);
 
   return (
     <div>
@@ -108,8 +128,13 @@ export function FindingsView({
           <span className="mono">{jobPath || reviews[0]?.file_path || "—"}</span>
         </span>
         <span>
-          Workers: {reviews.map((r) => r.worker_name).join(", ") || "none"}
+          Workers: {workerNames.join(", ") || "none"}
         </span>
+        {fileCount > 1 ? (
+          <span>
+            Files: <strong>{fileCount}</strong>
+          </span>
+        ) : null}
         <span>
           Accepted: <strong>{acceptedCount}</strong>
         </span>
@@ -132,14 +157,14 @@ export function FindingsView({
             Evidence bar not met
           </span>
         ) : null}
-        {cleanWorkers.length > 0 && findings.length > 0
-          ? cleanWorkers.map((r) => (
+        {cleanWorkerNames.length > 0 && findings.length > 0
+          ? cleanWorkerNames.map((name) => (
               <span
-                key={r.id}
+                key={name}
                 className="badge badge-clean"
-                title={`${r.worker_name} clean`}
+                title={`${name} reported clean on every reviewed file`}
               >
-                {r.worker_name}: clean
+                {name}: clean
               </span>
             ))
           : null}
@@ -292,7 +317,7 @@ export function FindingsView({
                 </div>
 
                 <div className="evidence-callout" role="note">
-                  <span aria-hidden="true">◈</span>
+                  <Diamond className="evidence-callout-icon" aria-hidden />
                   <div style={{ flex: 1, minWidth: 0 }}>
                     <strong>Evidence</strong>
                     <CodeBlock

@@ -4,19 +4,61 @@ import {
   Check,
   Circle,
   CornerDownRight,
+  FileCode2,
+  FolderTree,
   Loader2,
+  RefreshCw,
+  SlidersHorizontal,
 } from "lucide-react";
 import {
   getJob,
   getJobAudit,
+  previewReview,
   submitReview,
   type AuditEvent,
   type JobPayload,
+  type ReviewOptions,
+  type ReviewPreview,
 } from "../api";
 import { AgentTimeline } from "../components/AgentTimeline";
 import { derivePipelineFromAudit } from "../pipelineTimeline";
 
 const POLL_MS = 600;
+const PREVIEW_DEBOUNCE_MS = 450;
+
+const DEFAULT_OPTIONS: ReviewOptions = {
+  workers: 2,
+  max_files: 10,
+  include_init: false,
+  include: [],
+  exclude: [],
+};
+
+function parsePatterns(value: string) {
+  return value
+    .split(/[\n,]+/)
+    .map((item) => item.trim())
+    .filter(Boolean);
+}
+
+function friendlyPreviewError(message: string) {
+  if (
+    message.includes("review_id") &&
+    (message.includes("preview") || message.includes("integer"))
+  ) {
+    return "Preview endpoint missing on the running API. Restart the FastAPI server so GET /reviews/preview is loaded.";
+  }
+  return message;
+}
+
+function displayPath(path: string, root?: string) {
+  if (!root) return path;
+  const normalizedPath = path.replaceAll("\\", "/");
+  const normalizedRoot = root.replaceAll("\\", "/").replace(/\/$/, "");
+  return normalizedPath.startsWith(`${normalizedRoot}/`)
+    ? normalizedPath.slice(normalizedRoot.length + 1)
+    : path;
+}
 
 const JOB_STAGES = [
   { id: "queued", label: "Job accepted" },
@@ -69,7 +111,9 @@ function formatStageDetail(event: AuditEvent) {
 
   switch (event.stage) {
     case "review_start":
-      return "starting Security + Architecture review";
+      return typeof detail.path === "string"
+        ? `starting Security + Architecture · ${detail.path}`
+        : "starting Security + Architecture review";
     case "schema_validation":
       return `${count("finding_count") || "0"} finding(s) validated`;
     case "confidence_gate": {
@@ -80,7 +124,9 @@ function formatStageDetail(event: AuditEvent) {
     case "review_persisted":
       return `review #${detail.review_id ?? "—"} persisted`;
     case "review_complete":
-      return `${count("accepted_count") || "0"} accepted · ${
+      return `${typeof detail.path === "string" ? `${detail.path} · ` : ""}${
+        count("accepted_count") || "0"
+      } accepted · ${
         count("needs_review_count") || "0"
       } needs review`;
     case "prompt_io":
@@ -241,9 +287,70 @@ export function SubmitReview({
   const [auditEvents, setAuditEvents] = useState<AuditEvent[]>([]);
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [workers, setWorkers] = useState(DEFAULT_OPTIONS.workers);
+  const [maxFiles, setMaxFiles] = useState(DEFAULT_OPTIONS.max_files);
+  const [includeInit, setIncludeInit] = useState(DEFAULT_OPTIONS.include_init);
+  const [includeText, setIncludeText] = useState("");
+  const [excludeText, setExcludeText] = useState("");
+  const [preview, setPreview] = useState<ReviewPreview | null>(null);
+  const [previewError, setPreviewError] = useState<string | null>(null);
+  const [previewing, setPreviewing] = useState(false);
   const doneRef = useRef(false);
   const seenAuditIds = useRef(new Set<number>());
   const auditLogRef = useRef<HTMLDivElement>(null);
+
+  const reviewOptions = useMemo<ReviewOptions>(
+    () => ({
+      workers: Math.max(1, workers),
+      max_files: Math.max(1, maxFiles),
+      include_init: includeInit,
+      include: parsePatterns(includeText),
+      exclude: parsePatterns(excludeText),
+    }),
+    [excludeText, includeInit, includeText, maxFiles, workers],
+  );
+
+  useEffect(() => {
+    const trimmed = path.trim();
+    if (
+      !trimmed ||
+      submitting ||
+      job?.status === "queued" ||
+      job?.status === "running"
+    ) {
+      if (!trimmed) {
+        setPreview(null);
+        setPreviewError(null);
+      }
+      setPreviewing(false);
+      return;
+    }
+    let cancelled = false;
+    setPreviewing(true);
+    const timeout = window.setTimeout(() => {
+      setPreviewError(null);
+      void previewReview(trimmed, reviewOptions)
+        .then((next) => {
+          if (!cancelled) setPreview(next);
+        })
+        .catch((err: unknown) => {
+          if (cancelled) return;
+          setPreview(null);
+          setPreviewError(
+            friendlyPreviewError(
+              err instanceof Error ? err.message : String(err),
+            ),
+          );
+        })
+        .finally(() => {
+          if (!cancelled) setPreviewing(false);
+        });
+    }, PREVIEW_DEBOUNCE_MS);
+    return () => {
+      cancelled = true;
+      window.clearTimeout(timeout);
+    };
+  }, [job?.status, path, reviewOptions, submitting]);
 
   useEffect(() => {
     if (!auditLogRef.current) return;
@@ -316,9 +423,13 @@ export function SubmitReview({
       setError("Enter a file or directory path.");
       return;
     }
+    if (preview?.kind === "directory" && preview.selected_count === 0) {
+      setError("No eligible Python files match the directory options.");
+      return;
+    }
     setSubmitting(true);
     try {
-      const accepted = await submitReview(trimmed);
+      const accepted = await submitReview(trimmed, reviewOptions);
       setJobId(accepted.job_id);
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
@@ -339,6 +450,47 @@ export function SubmitReview({
     () => derivePipelineFromAudit(auditEvents, status),
     [auditEvents, status],
   );
+
+  const fileProgress = useMemo(() => {
+    if (preview?.kind !== "directory") return [];
+    const states = new Map<
+      string,
+      { state: "queued" | "running" | "completed"; accepted?: number; needs?: number }
+    >(
+      preview.files.map((file) => [
+        file,
+        { state: "queued" as const },
+      ]),
+    );
+    for (const event of auditEvents) {
+      if (event.stage !== "review_start" && event.stage !== "review_complete") continue;
+      const rawPath =
+        typeof event.detail.path === "string" ? event.detail.path : null;
+      if (!rawPath) continue;
+      const file = displayPath(rawPath, preview.path);
+      if (!states.has(file)) continue;
+      if (event.stage === "review_start") {
+        states.set(file, { state: "running" });
+      } else {
+        states.set(file, {
+          state: "completed",
+          accepted:
+            typeof event.detail.accepted_count === "number"
+              ? event.detail.accepted_count
+              : 0,
+          needs:
+            typeof event.detail.needs_review_count === "number"
+              ? event.detail.needs_review_count
+              : 0,
+        });
+      }
+    }
+    return [...states.entries()].map(([file, value]) => ({ file, ...value }));
+  }, [auditEvents, preview]);
+
+  const completedFiles = fileProgress.filter(
+    (item) => item.state === "completed",
+  ).length;
 
   const statusLabel =
     status === "failed"
@@ -397,7 +549,12 @@ export function SubmitReview({
           <button
             type="submit"
             className="btn btn-primary"
-            disabled={submitting || polling}
+            disabled={
+              submitting ||
+              polling ||
+              previewing ||
+              (preview?.kind === "directory" && preview.selected_count === 0)
+            }
           >
             {submitting || polling ? (
               <>
@@ -409,9 +566,152 @@ export function SubmitReview({
             )}
           </button>
         </div>
+        <div className="path-preview-status" aria-live="polite">
+          {previewing ? (
+            <>
+              <Loader2 className="inline-status-icon spin" aria-hidden />
+              Checking path and eligible files…
+            </>
+          ) : preview?.kind === "file" ? (
+            <>
+              <FileCode2 className="inline-status-icon" aria-hidden />
+              Single file · Security and Architecture will both run
+            </>
+          ) : preview?.kind === "directory" ? (
+            <>
+              <FolderTree className="inline-status-icon" aria-hidden />
+              Directory · bounded concurrent file review
+            </>
+          ) : previewError ? (
+            <>
+              <AlertTriangle className="inline-status-icon" aria-hidden />
+              {previewError}
+            </>
+          ) : null}
+        </div>
+
+        {preview?.kind === "directory" ? (
+          <section className="directory-config-panel" aria-label="Directory review options">
+            <div className="directory-config-heading">
+              <div>
+                <p className="section-label">
+                  <SlidersHorizontal
+                    className="section-label-icon"
+                    aria-hidden
+                  />
+                  Directory controls
+                </p>
+                <p className="directory-config-copy">
+                  Workers are concurrent file reviews. Every selected file still
+                  runs both Security and Architecture.
+                </p>
+              </div>
+              <span className="badge badge-neutral">alphabetical</span>
+            </div>
+
+            <div className="directory-control-grid">
+              <label className="compact-field">
+                <span className="field-label">Workers</span>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  value={workers}
+                  onChange={(event) =>
+                    setWorkers(Math.max(1, Number(event.target.value) || 1))
+                  }
+                  disabled={submitting || polling}
+                />
+              </label>
+              <label className="compact-field">
+                <span className="field-label">Max files</span>
+                <input
+                  className="field-input"
+                  type="number"
+                  min={1}
+                  value={maxFiles}
+                  onChange={(event) =>
+                    setMaxFiles(Math.max(1, Number(event.target.value) || 1))
+                  }
+                  disabled={submitting || polling}
+                />
+              </label>
+              <label className="checkbox-field">
+                <input
+                  type="checkbox"
+                  checked={includeInit}
+                  onChange={(event) => setIncludeInit(event.target.checked)}
+                  disabled={submitting || polling}
+                />
+                <span>
+                  <strong>Include __init__.py</strong>
+                  <small>Trivial package markers still stay excluded.</small>
+                </span>
+              </label>
+            </div>
+
+            <div className="directory-pattern-grid">
+              <label>
+                <span className="field-label">Include globs (optional)</span>
+                <input
+                  className="field-input mono"
+                  value={includeText}
+                  onChange={(event) => setIncludeText(event.target.value)}
+                  placeholder="src/**, app/**/*.py"
+                  disabled={submitting || polling}
+                />
+              </label>
+              <label>
+                <span className="field-label">Exclude globs (optional)</span>
+                <input
+                  className="field-input mono"
+                  value={excludeText}
+                  onChange={(event) => setExcludeText(event.target.value)}
+                  placeholder="tests/**, **/generated.py"
+                  disabled={submitting || polling}
+                />
+              </label>
+            </div>
+
+            <div className="selection-summary">
+              <div>
+                <strong>
+                  {preview.selected_count} eligible file
+                  {preview.selected_count === 1 ? "" : "s"} selected
+                </strong>
+                <span>
+                  {preview.capped
+                    ? `capped from ${preview.eligible_count}`
+                    : `${preview.eligible_count} eligible total`}{" "}
+                  · workers={workers}
+                </span>
+              </div>
+              {previewing ? (
+                <RefreshCw className="inline-status-icon spin" aria-label="Refreshing preview" />
+              ) : null}
+            </div>
+
+            <div className="eligible-file-list" aria-label="Selected eligible files">
+              {preview.files.length === 0 ? (
+                <div className="directory-empty-state">
+                  <FileCode2 aria-hidden />
+                  <span>No eligible Python files match these options.</span>
+                </div>
+              ) : (
+                preview.files.map((file, index) => (
+                  <div className="eligible-file-row" key={file} title={file}>
+                    <span className="file-order mono">{index + 1}</span>
+                    <FileCode2 className="eligible-file-icon" aria-hidden />
+                    <span className="mono path-wrap">{file}</span>
+                  </div>
+                ))
+              )}
+            </div>
+          </section>
+        ) : null}
         <p className="submit-hint">
-          Supervisor decides which workers and tools run. Memory and web only
-          light up when routing calls them.
+          Security and Architecture both run for every file. Memory and web only
+          light up when the Supervisor routes to them.
         </p>
         {error && !(jobId || job) ? <p className="error-text">{error}</p> : null}
       </form>
@@ -464,6 +764,49 @@ export function SubmitReview({
                 })}
               </ol>
             </div>
+
+            {fileProgress.length > 0 ? (
+              <div className="file-progress-panel">
+                <div className="file-progress-heading">
+                  <div>
+                    <p className="section-label">Per-file progress</p>
+                    <p className="file-progress-summary">
+                      {completedFiles}/{fileProgress.length} complete · up to{" "}
+                      {workers} concurrent file review
+                      {workers === 1 ? "" : "s"}
+                    </p>
+                  </div>
+                  <span className="badge badge-neutral">
+                    Security + Architecture per file
+                  </span>
+                </div>
+                <div className="file-progress-list">
+                  {fileProgress.map((item) => (
+                    <div
+                      className={`file-progress-row file-progress-row--${item.state}`}
+                      key={item.file}
+                      title={item.file}
+                    >
+                      <span className="file-progress-mark" aria-hidden>
+                        {item.state === "completed" ? (
+                          <Check />
+                        ) : item.state === "running" ? (
+                          <Loader2 className="spin" />
+                        ) : (
+                          <Circle />
+                        )}
+                      </span>
+                      <span className="mono path-wrap">{item.file}</span>
+                      <span className="file-progress-state">
+                        {item.state === "completed"
+                          ? `${item.accepted ?? 0} accepted · ${item.needs ?? 0} needs review`
+                          : item.state}
+                      </span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            ) : null}
 
             {status === "completed" && findingsReady && onViewFindings ? (
               <div className="submit-complete-banner">

@@ -605,6 +605,232 @@ a {
   line-height: 1.45;
 }
 
+.path-preview-status {
+  min-height: 1.5rem;
+  display: flex;
+  align-items: center;
+  gap: 0.4rem;
+  margin: 0.45rem var(--panel-pad-x) 0;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+  overflow-wrap: anywhere;
+}
+
+.inline-status-icon,
+.section-label-icon {
+  width: 0.9rem;
+  height: 0.9rem;
+  flex: 0 0 auto;
+}
+
+.spin {
+  animation: spin 0.7s linear infinite;
+}
+
+.badge-neutral {
+  color: var(--text-secondary);
+  border: 1px solid var(--surface-border);
+  background: var(--surface);
+}
+
+.directory-config-panel {
+  margin: 0.7rem var(--panel-pad-x) 0;
+  padding: 0.85rem;
+  border: 1px solid var(--surface-border);
+  border-radius: var(--radius);
+  background: color-mix(in srgb, var(--surface-muted) 72%, var(--surface));
+  animation: directory-panel-in var(--motion-med) var(--ease-out);
+}
+
+.directory-config-heading,
+.file-progress-heading,
+.selection-summary {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+}
+
+.directory-config-heading .section-label {
+  display: flex;
+  align-items: center;
+  gap: 0.35rem;
+  margin: 0;
+}
+
+.directory-config-copy {
+  margin: 0.2rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+  line-height: 1.4;
+}
+
+.directory-control-grid {
+  display: grid;
+  grid-template-columns: minmax(7rem, 0.6fr) minmax(7rem, 0.6fr) minmax(14rem, 1.8fr);
+  gap: 0.7rem;
+  align-items: end;
+  margin-top: 0.8rem;
+}
+
+.directory-config-panel .field-label {
+  display: block;
+  margin: 0 0 0.28rem;
+}
+
+.compact-field .field-input {
+  min-height: 2.35rem;
+  padding-block: 0.4rem;
+}
+
+.checkbox-field {
+  min-height: 2.35rem;
+  display: flex;
+  align-items: center;
+  gap: 0.55rem;
+  padding: 0.45rem 0.65rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface);
+  cursor: pointer;
+}
+
+.checkbox-field input {
+  width: 1rem;
+  height: 1rem;
+  accent-color: var(--accent-blue);
+}
+
+.checkbox-field span {
+  display: flex;
+  min-width: 0;
+  flex-direction: column;
+  line-height: 1.25;
+}
+
+.checkbox-field strong {
+  font-size: var(--type-small);
+  font-weight: 620;
+}
+
+.checkbox-field small {
+  color: var(--text-secondary);
+  font-size: var(--type-micro);
+}
+
+.directory-pattern-grid {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 0.7rem;
+  margin-top: 0.7rem;
+}
+
+.directory-pattern-grid .field-input {
+  min-height: 2.35rem;
+  padding-block: 0.4rem;
+  font-size: var(--type-small);
+}
+
+.selection-summary {
+  align-items: center;
+  margin-top: 0.8rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 24%, var(--surface-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-blue) 5%, var(--surface));
+}
+
+.selection-summary > div {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 0.2rem 0.55rem;
+}
+
+.selection-summary strong {
+  font-size: var(--type-ui);
+  font-weight: 650;
+}
+
+.selection-summary span {
+  color: var(--text-secondary);
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+}
+
+.eligible-file-list,
+.file-progress-list {
+  max-height: 11rem;
+  overflow: auto;
+  margin-top: 0.6rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface);
+}
+
+.eligible-file-row {
+  display: grid;
+  grid-template-columns: 1.4rem 1rem minmax(0, 1fr);
+  align-items: center;
+  gap: 0.4rem;
+  min-height: 2rem;
+  padding: 0.35rem 0.55rem;
+  border-bottom: 1px solid var(--surface-border);
+  font-size: var(--type-small);
+}
+
+.eligible-file-row:last-child,
+.file-progress-row:last-child {
+  border-bottom: 0;
+}
+
+.file-order {
+  color: var(--text-secondary);
+  font-size: var(--type-micro);
+  text-align: right;
+}
+
+.eligible-file-icon {
+  width: 0.8rem;
+  height: 0.8rem;
+  color: var(--accent-blue);
+}
+
+.directory-empty-state {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 0.5rem;
+  min-height: 4.5rem;
+  padding: 1rem;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+  text-align: center;
+}
+
+.directory-empty-state svg {
+  width: 1rem;
+  height: 1rem;
+}
+
+@keyframes directory-panel-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
+@media (max-width: 720px) {
+  .directory-control-grid,
+  .directory-pattern-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
 .submit-run-grid {
   display: grid;
   gap: 1rem;
@@ -703,6 +929,82 @@ a {
 
 .job-stage-icon--spin {
   animation: spin 0.7s linear infinite;
+}
+
+.file-progress-panel {
+  margin: 0.85rem var(--panel-pad-x) 0;
+  padding: 0.75rem 0.85rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.file-progress-heading {
+  align-items: center;
+}
+
+.file-progress-heading .section-label {
+  margin: 0;
+}
+
+.file-progress-summary {
+  margin: 0.18rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.file-progress-list {
+  max-height: 14rem;
+  margin-top: 0.65rem;
+}
+
+.file-progress-row {
+  display: grid;
+  grid-template-columns: 1rem minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 0.45rem;
+  min-height: 2.1rem;
+  padding: 0.4rem 0.55rem;
+  border-bottom: 1px solid var(--surface-border);
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.file-progress-mark {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.file-progress-mark svg {
+  width: 0.78rem;
+  height: 0.78rem;
+}
+
+.file-progress-row--running {
+  color: var(--accent-blue);
+  background: color-mix(in srgb, var(--accent-blue) 4%, var(--surface));
+}
+
+.file-progress-row--completed .file-progress-mark {
+  color: var(--severity-low);
+}
+
+.file-progress-state {
+  white-space: nowrap;
+  font-family: var(--font-mono);
+  font-size: var(--type-micro);
+}
+
+@media (max-width: 620px) {
+  .file-progress-row {
+    grid-template-columns: 1rem minmax(0, 1fr);
+  }
+
+  .file-progress-state {
+    grid-column: 2;
+    white-space: normal;
+  }
 }
 
 .submit-complete-banner {
@@ -1487,6 +1789,13 @@ a {
   margin-bottom: 1.1rem;
 }
 
+.evidence-callout-icon {
+  width: 0.95rem;
+  height: 0.95rem;
+  flex-shrink: 0;
+  margin-top: 0.15rem;
+}
+
 .evidence-callout strong {
   display: block;
   margin-bottom: 0.35rem;
@@ -1700,6 +2009,348 @@ a {
   border-color: color-mix(in srgb, var(--accent-blue) 30%, var(--surface-border));
 }
 
+.select-search-wrap {
+  position: relative;
+  margin-bottom: 0.7rem;
+}
+
+.select-search-wrap > svg {
+  position: absolute;
+  left: 0.75rem;
+  top: 50%;
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--text-secondary);
+  transform: translateY(-50%);
+  pointer-events: none;
+}
+
+.select-search-wrap .field-input {
+  padding-left: 2.15rem;
+}
+
+.review-combobox {
+  position: relative;
+}
+
+.review-combobox-trigger {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.75rem;
+  width: 100%;
+  min-height: var(--control-height);
+  padding: 0.55rem 0.8rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface);
+  color: var(--text-primary);
+  text-align: left;
+  cursor: pointer;
+  transition:
+    border-color var(--motion-fast) var(--ease-out),
+    box-shadow var(--motion-fast) var(--ease-out);
+}
+
+.review-combobox-trigger:hover:not(:disabled) {
+  border-color: color-mix(in srgb, var(--accent-blue) 35%, var(--surface-border));
+}
+
+.review-combobox-trigger:focus-visible,
+.review-combobox-trigger.is-open {
+  outline: none;
+  border-color: var(--accent-blue);
+  box-shadow: 0 0 0 3px color-mix(in srgb, var(--accent-blue) 18%, transparent);
+}
+
+.review-combobox-trigger:disabled {
+  opacity: 0.6;
+  cursor: not-allowed;
+}
+
+.review-combobox-trigger-main {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+  min-width: 0;
+}
+
+.review-combobox-placeholder {
+  color: var(--text-secondary);
+}
+
+.review-combobox-id {
+  font-family: var(--font-mono);
+  font-weight: 650;
+}
+
+.review-combobox-worker {
+  display: inline-flex;
+  align-items: center;
+  padding: 0.12rem 0.45rem;
+  border-radius: 999px;
+  font-size: var(--type-micro);
+  font-weight: 650;
+  letter-spacing: 0.02em;
+  text-transform: uppercase;
+  background: var(--surface-muted);
+  color: var(--text-secondary);
+}
+
+.review-combobox-worker--security {
+  background: color-mix(in srgb, var(--accent-blue) 14%, var(--surface));
+  color: var(--accent-blue);
+}
+
+.review-combobox-worker--architecture {
+  background: color-mix(in srgb, var(--accent-orange) 16%, var(--surface));
+  color: #c2410c;
+}
+
+.review-combobox-file {
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.review-combobox-chevron {
+  width: 1rem;
+  height: 1rem;
+  flex-shrink: 0;
+  color: var(--text-secondary);
+  transition: transform var(--motion-fast) var(--ease-out);
+}
+
+.review-combobox-trigger.is-open .review-combobox-chevron {
+  transform: rotate(180deg);
+}
+
+.review-combobox-panel {
+  position: absolute;
+  z-index: 30;
+  top: calc(100% + 0.4rem);
+  left: 0;
+  right: 0;
+  overflow: hidden;
+  border: 1px solid var(--surface-border);
+  border-radius: 10px;
+  background: var(--surface);
+  box-shadow: 0 12px 32px color-mix(in srgb, #14171c 12%, transparent);
+  animation: review-combobox-in 140ms var(--ease-out);
+}
+
+.review-combobox-search {
+  position: relative;
+  padding: 0.65rem 0.7rem 0.45rem;
+  border-bottom: 1px solid var(--surface-border);
+  background: color-mix(in srgb, var(--surface-muted) 70%, var(--surface));
+}
+
+.review-combobox-search > svg {
+  position: absolute;
+  left: 1.25rem;
+  top: 50%;
+  width: 0.9rem;
+  height: 0.9rem;
+  color: var(--text-secondary);
+  transform: translateY(-40%);
+  pointer-events: none;
+}
+
+.review-combobox-search .field-input {
+  padding-left: 2.15rem;
+}
+
+.review-combobox-list {
+  margin: 0;
+  padding: 0.35rem;
+  list-style: none;
+  max-height: 18rem;
+  overflow: auto;
+}
+
+.review-combobox-empty {
+  padding: 0.85rem 0.75rem;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.review-combobox-option {
+  display: grid;
+  gap: 0.2rem;
+  width: 100%;
+  padding: 0.65rem 0.7rem;
+  border: 0;
+  border-radius: 8px;
+  background: transparent;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-combobox-option.is-active,
+.review-combobox-option:hover {
+  background: color-mix(in srgb, var(--accent-blue) 8%, var(--surface));
+}
+
+.review-combobox-option.is-selected {
+  background: color-mix(in srgb, var(--accent-blue) 12%, var(--surface));
+}
+
+.review-combobox-option-top {
+  display: flex;
+  align-items: center;
+  gap: 0.45rem;
+}
+
+.review-combobox-check {
+  width: 0.9rem;
+  height: 0.9rem;
+  margin-left: auto;
+  color: var(--accent-blue);
+}
+
+.review-combobox-option-file {
+  font-size: var(--type-small);
+  color: var(--text-primary);
+}
+
+.review-combobox-option-meta {
+  font-size: var(--type-micro);
+  color: var(--text-secondary);
+}
+
+@keyframes review-combobox-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+.field-select {
+  min-height: var(--control-height);
+  padding-right: 2.25rem;
+  text-overflow: ellipsis;
+}
+
+.selected-option-detail {
+  margin-top: 0.55rem;
+  padding: 0.65rem 0.75rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  background: var(--surface-muted);
+}
+
+.selected-option-detail > div,
+.finding-selection-summary {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 0.4rem 0.55rem;
+}
+
+.selected-option-detail p {
+  margin: 0.45rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+}
+
+.finding-selection-summary {
+  margin-top: 0.55rem;
+}
+
+.finding-selection-summary strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  font-size: var(--type-ui);
+}
+
+.memory-save-note {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 0.85rem;
+  padding: 0.7rem 0.75rem;
+  border: 1px solid color-mix(in srgb, var(--accent-blue) 25%, var(--surface-border));
+  border-radius: 8px;
+  background: color-mix(in srgb, var(--accent-blue) 5%, var(--surface));
+}
+
+.memory-save-note > svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+  color: var(--accent-blue);
+}
+
+.memory-save-note strong {
+  font-size: var(--type-small);
+}
+
+.memory-save-note p {
+  margin: 0.18rem 0 0;
+  color: var(--text-secondary);
+  font-size: var(--type-small);
+  line-height: 1.45;
+}
+
+.outcome-status-notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 0.55rem;
+  margin-top: 0.8rem;
+  padding: 0.75rem 0.8rem;
+  border: 1px solid var(--surface-border);
+  border-radius: 8px;
+  animation: status-notice-in var(--motion-med) var(--ease-out);
+}
+
+.outcome-status-notice > svg {
+  width: 1rem;
+  height: 1rem;
+  flex: 0 0 auto;
+  margin-top: 0.08rem;
+}
+
+.outcome-status-notice strong {
+  display: block;
+  font-size: var(--type-ui);
+}
+
+.outcome-status-notice p {
+  margin: 0.15rem 0 0;
+  font-size: var(--type-small);
+  line-height: 1.4;
+}
+
+.outcome-status-notice--success {
+  color: #146c34;
+  border-color: color-mix(in srgb, var(--severity-low) 35%, var(--surface-border));
+  background: color-mix(in srgb, var(--severity-low) 8%, var(--surface));
+}
+
+.outcome-status-notice--warning {
+  color: var(--callout-warning-text);
+  border-color: color-mix(in srgb, var(--severity-medium) 35%, var(--surface-border));
+  background: var(--callout-warning-bg);
+}
+
+@keyframes status-notice-in {
+  from {
+    opacity: 0;
+    transform: translateY(4px);
+  }
+  to {
+    opacity: 1;
+    transform: none;
+  }
+}
+
 .outcome-card-header {
   display: flex;
   flex-wrap: wrap;
@@ -1747,6 +2398,10 @@ a {
     animation: none;
     border-top-color: var(--accent-blue);
     opacity: 0.7;
+  }
+
+  .review-combobox-panel {
+    animation: none;
   }
 
   .finding-row:hover,

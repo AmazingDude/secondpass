@@ -213,3 +213,129 @@ def test_accept_reject_outcome_via_api(
 def test_submit_missing_path_returns_400(client: TestClient) -> None:
     response = client.post("/reviews", json={"path": "does/not/exist.py"})
     assert response.status_code == 400
+
+
+def test_preview_directory_reuses_deterministic_selection(
+    client: TestClient, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "b.py").write_text("VALUE = 2\n", encoding="utf-8")
+    (root / "__init__.py").write_text("PACKAGE = True\n", encoding="utf-8")
+
+    response = client.get(
+        "/reviews/preview",
+        params={"path": str(root), "max_files": 1},
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["kind"] == "directory"
+    assert body["eligible_count"] == 2
+    assert body["selected_count"] == 1
+    assert body["capped"] is True
+    assert body["files"] == ["a.py"]
+    assert body["skipped"]["init"] == 1
+
+
+def test_directory_submit_passes_multifile_options_to_runner(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+    received: dict[str, object] = {}
+
+    def runner(
+        path: str,
+        *,
+        job_id: str,
+        workers: int,
+        max_files: int,
+        include_init: bool,
+        include: tuple[str, ...],
+        exclude: tuple[str, ...],
+    ) -> dict:
+        received.update(
+            {
+                "path": path,
+                "job_id": job_id,
+                "workers": workers,
+                "max_files": max_files,
+                "include_init": include_init,
+                "include": include,
+                "exclude": exclude,
+            }
+        )
+        return {
+            "summary": {"accepted_count": 0, "needs_review_count": 0},
+            "persisted_review_ids": [],
+        }
+
+    monkeypatch.setattr("app.api.job_store._runner", runner)
+    response = client.post(
+        "/reviews",
+        json={
+            "path": str(root),
+            "workers": 3,
+            "max_files": 7,
+            "include_init": True,
+            "include": ["src/**"],
+            "exclude": ["**/generated.py"],
+        },
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    for _ in range(50):
+        body = client.get(f"/reviews/jobs/{job_id}").json()
+        if body["status"] == "completed":
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("directory job did not complete")
+
+    assert received["workers"] == 3
+    assert received["max_files"] == 7
+    assert received["include_init"] is True
+    assert received["include"] == ("src/**",)
+    assert received["exclude"] == ("**/generated.py",)
+
+
+def test_directory_submit_runs_selected_files_end_to_end(
+    client: TestClient, tmp_path: Path, monkeypatch
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "a.py").write_text("VALUE = 1\n", encoding="utf-8")
+    (root / "b.py").write_text("VALUE = 2\n", encoding="utf-8")
+    reviewed: list[str] = []
+
+    def fake_supervise(path: str, *, job_id: str | None = None) -> dict:
+        assert job_id
+        reviewed.append(Path(path).name)
+        return _fake_combined(path)
+
+    monkeypatch.setattr("app.supervisor.supervise_review", fake_supervise)
+    response = client.post(
+        "/reviews",
+        json={"path": str(root), "workers": 2, "max_files": 2},
+    )
+    assert response.status_code == 202
+    job_id = response.json()["job_id"]
+
+    for _ in range(50):
+        body = client.get(f"/reviews/jobs/{job_id}").json()
+        if body["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("directory job did not complete")
+
+    assert body["status"] == "completed"
+    assert sorted(reviewed) == ["a.py", "b.py"]
+    assert body["result"]["mode"] == "directory"
+    assert body["result"]["selection"]["selected"] == ["a.py", "b.py"]
+    assert body["summary"]["file_count"] == 2
+    assert len(body["persisted_review_ids"]) == 4
