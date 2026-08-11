@@ -2,9 +2,9 @@
 
 A **personal security + architecture review agent**.
 
-It runs Semgrep and an LLM logic/authorization pass, then an architecture pass, under one Supervisor. Findings share a schema and confidence gate. Security can retrieve curated personal lessons from Chroma; you record accept/reject decisions in SQLite. Optional Tavily web context. Built as a second pass over your own recurring mistakes — not a replacement for a full AppSec program.
+It runs Semgrep and an LLM logic/authorization pass, then an architecture pass, under one Supervisor. Findings share a schema and confidence gate. Security can retrieve curated personal lessons from Chroma; you record accept/reject decisions in SQLite. Optional Tavily web context. Built as a second pass over your own recurring mistakes, not a replacement for a full AppSec program.
 
-Detection-quality journey, final numbers, and known limits: [`benchmark/REPORT.md`](benchmark/REPORT.md). Slide-ready system map: [`ARCHITECTURE.md`](ARCHITECTURE.md).
+Detection-quality journey, final numbers, and known limits: [`benchmark/REPORT.md`](benchmark/REPORT.md). System map: [`ARCHITECTURE.md`](ARCHITECTURE.md).
 
 ---
 
@@ -21,7 +21,7 @@ Detection-quality journey, final numbers, and known limits: [`benchmark/REPORT.m
 | **Dashboard** | Vite + React: Submit, Findings, History, Memory |
 | **MCP** | Stdio `review_code` for Cursor / Claude Code / other clients |
 
-**Coverage honesty:** if logic-review cannot complete (e.g. LLM rate limit), the review is **inconclusive** — not “clean,” and not the same as a low-confidence **needs review** finding. The CLI and dashboard treat those states separately.
+**Coverage honesty:** if logic-review cannot complete (e.g. LLM rate limit), the review is **inconclusive**, not “clean,” and not the same as a low-confidence **needs review** finding. The CLI and dashboard treat those states separately.
 
 ---
 
@@ -44,7 +44,7 @@ Triggers: CLI · API · MCP · Dashboard
    + Chroma lessons (retrieval)
 ```
 
-**30-second talk track:** one Supervisor, two workers, same schema + gate; Chroma retrieves seed lessons and human-accepted promotions; SQLite stores every decision (rejects never enter Chroma). Hard post-filters after the LLM (category bleed, target attribution, insufficient structure, package/import-edge rules) are why Architecture precision moved — see the report.
+One Supervisor, two workers, same schema + gate. Chroma retrieves seed lessons and human-accepted promotions; SQLite stores every decision (rejects never enter Chroma). Hard post-filters after the LLM (category bleed, target attribution, insufficient structure, package/import-edge rules) are why Architecture precision moved. See the report.
 
 ---
 
@@ -84,9 +84,9 @@ LLM_MODEL=                 # optional; leave empty for provider default
 TAVILY_API_KEY=...
 ```
 
-Only the key for your chosen `LLM_PROVIDER` is required. If `LLM_MODEL` is set to an OpenAI id while using Groq, Groq will 404 — clear it or set a model that provider accepts.
+Only the key for your chosen `LLM_PROVIDER` is required. If `LLM_MODEL` is set to an OpenAI id while using Groq, Groq will 404: clear it or set a model that provider accepts.
 
-Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disagree on neighboring Architecture labels for the same bug — see [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
+Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disagree on neighboring Architecture labels for the same bug. See [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
 
 ---
 
@@ -98,7 +98,10 @@ python -m app.cli --help
 python -m app.cli review path/to/file_or_dir
 python -m app.cli review --diff
 
-python -m app.cli decide <review_id> --decision accept --reason "real IDOR"
+# Directory reviews (bounded; same semantics as the dashboard)
+python -m app.cli review path/to/dir --max-files 10 --workers 2
+
+python -m app.cli decide --review-id <id> --index 0 --accept --reason "real IDOR"
 python -m app.cli list-reviews
 python -m app.cli list-outcomes
 python -m app.cli audit <job_id>
@@ -107,7 +110,7 @@ python -m app.cli search-memory "user can read someone else's data"
 python -m app.cli search-web "OWASP broken access control A01"
 ```
 
-Use either `review <path>` **or** `review --diff`, not both.
+Use either `review <path>` **or** `review --diff`, not both. For directories, `--workers` is concurrent **file** reviews; Security and Architecture still both run per file.
 
 ---
 
@@ -121,9 +124,22 @@ python -m app.api
 cd web && npm install && npm run dev
 ```
 
-API default: `http://127.0.0.1:8000`. UI usually `http://127.0.0.1:5173` (`VITE_API_BASE` to override).
+API default: `http://127.0.0.1:8000`. Interactive OpenAPI docs: [`http://127.0.0.1:8000/docs`](http://127.0.0.1:8000/docs) (also `/redoc`). UI usually `http://127.0.0.1:5173` (`VITE_API_BASE` to override).
 
-Views: **Submit** → **Findings** → **History** → **Memory** (verified outcomes). History shows **Incomplete** when coverage failed — not **Clean**.
+Views: **Submit**, **Findings**, **History**, **Memory**. After a job completes, Submit keeps the live timeline/audit trail; open Findings when ready. History shows **Incomplete** when coverage failed, not **Clean**. Directory submit supports `workers` / `max-files` / include-exclude (same as CLI).
+
+---
+
+## Docs map
+
+| Doc | What it’s for |
+| --- | --- |
+| This README | Setup, CLI/API/MCP surfaces, benchmark snapshot |
+| [`ARCHITECTURE.md`](ARCHITECTURE.md) | System map and wiring |
+| [`Phase3_PRD.md`](Phase3_PRD.md) | Mentor-approved Phase 3 scope |
+| [`benchmark/REPORT.md`](benchmark/REPORT.md) | Detection-quality journey and scored results |
+| [`prompts.md`](prompts.md) | Chronological build / interaction log |
+| [`REFLECTION.md`](REFLECTION.md) | What AI did well, where it failed, lessons learned |
 
 ---
 
@@ -138,16 +154,19 @@ python -m app.benchmark_run_real_world --label my_real_world_run
 
 Results JSON under `benchmark/results/` (gitignored). Written report: [`benchmark/REPORT.md`](benchmark/REPORT.md).
 
-**Final snapshot (2026-08-04), accepted findings only:**
+**Measured snapshot (accepted findings only; see REPORT for full A/B notes):**
 
 | Suite | Provider | Precision | Recall | Notes |
 | --- | --- | ---: | ---: | --- |
-| Security own-suite | Groq | 1.0 | 1.0 | 4 planted classes + clean / reverse-bleed rows |
+| Security own-suite | Groq | 1.0 | 1.0 | 4 planted classes + clean / reverse-bleed rows (2026-08-04; clean reconfirm 2026-08-09) |
+| Security own-suite | OpenAI | 1.0 | 1.0 | Same planted suite (confidence-bucket run 2026-08-08) |
 | Architecture own-suite | Groq | 1.0 | 1.0 | layering + dependency-direction fixtures |
-| Cross-worker | Groq | — | status **ok** | 0 findings both directions |
-| Real-world Security mini-suite | OpenAI | 1.0 | 1.0 | **N=4** provenance CVE/teaching cases — generalization evidence, **not** calibrated accuracy |
+| Architecture own-suite | OpenAI | 1.0 | 0.5 | Same fixtures; one evidence-bar / claim_unverified miss (provider gap) |
+| Cross-worker | Groq | n/a | status **ok** | 0 findings both directions |
+| Real-world Security mini-suite | OpenAI | 1.0 | 1.0 | **N=4** provenance CVE/teaching cases |
+| Real-world Security mini-suite | Groq | 1.0 | 1.0 | Same **N=4** suite, independent A/B |
 
-Semgrep-only on that real-world set scored **0/4** recall; logic-review carries those detections. Suites are intentionally narrow and single-file scoped — see the report’s known limitations (including four Architecture FP modes found and closed in sequence).
+Semgrep-only on that real-world set scored **0/4** recall; logic-review carries those detections. Suites are intentionally narrow and single-file scoped. Provider-labeled rows only: do not mix OpenAI and Groq into one unlabeled score. Full confidence-bucket table and inconclusive-scoring notes: REPORT §5.
 
 ---
 
@@ -180,26 +199,27 @@ secondpass/
 ├── security_lessons.json
 ├── requirements.txt
 ├── .env.example
-├── README.md
 ├── ARCHITECTURE.md
-├── DEMO.md                   # Week 8 panel walkthrough (run-of-show)
-├── DEMO_STUDY.md             # deep understanding / Q&A prep
-└── prompts.md                # build / learning log
+├── Phase3_PRD.md
+├── REFLECTION.md             # Week 8: AI wins / fails / lessons
+├── prompts.md                # chronological build log
+└── README.md
 ```
 
 ---
 
 ## Notes & limits
 
-- Personal tool — not a complete SAST platform. Do not claim reliability on arbitrary real-world repos from these numbers alone.
+- Personal tool, not a complete SAST platform. Do not claim reliability on arbitrary real-world repos from these numbers alone.
+- Logic-review runs additively with Semgrep (not only when the static scan is empty). Inconclusive coverage ≠ clean ≠ needs_review.
 - Verified outcomes are always written to SQLite. Human ACCEPT may also promote a concise lesson into Chroma for later retrieval; REJECT stays SQLite-only. Near-duplicates of existing lessons are skipped.
 - Confidence is LLM self-reported; temperature=0 cuts variance, it does **not** calibrate confidence.
-- Architecture label stability can be provider-dependent (`layering_violation` vs `dependency_direction`).
-- Incomplete coverage (`inconclusive`) ≠ clean ≠ needs_review.
+- Architecture label stability can be provider-dependent (`layering_violation` vs `dependency_direction` / claim_unverified).
+- Local venv (or a local container) is enough to run the stack; public hosting is optional.
 - `.env`, `.chromadb/`, `.secondpass/`, and `benchmark/results/*` stay local / gitignored.
 
 ---
 
 ## License
 
-[MIT](LICENSE) — use, modify, and share freely.
+[MIT](LICENSE). Use, modify, and share freely.
