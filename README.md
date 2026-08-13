@@ -70,9 +70,11 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install -r requirements.txt
+pip install -e .
 cp .env.example .env
 ```
+
+(`pip install -r requirements.txt` still works if you only need the deps without the `secondpass` console script.)
 
 ```env
 LLM_PROVIDER=groq          # groq | openai | gemini | openrouter
@@ -93,21 +95,22 @@ Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disa
 ## CLI
 
 ```bash
-python -m app.cli --help
+secondpass --help
+# alternative without editable install: python -m app.cli --help
 
-python -m app.cli review path/to/file_or_dir
-python -m app.cli review --diff
+secondpass review path/to/file_or_dir
+secondpass review --diff
 
 # Directory reviews (bounded; same semantics as the dashboard)
-python -m app.cli review path/to/dir --max-files 10 --workers 2
+secondpass review path/to/dir --max-files 10 --workers 2
 
-python -m app.cli decide --review-id <id> --index 0 --accept --reason "real IDOR"
-python -m app.cli list-reviews
-python -m app.cli list-outcomes
-python -m app.cli audit <job_id>
+secondpass decide --review-id <id> --index 0 --accept --reason "real IDOR"
+secondpass list-reviews
+secondpass list-outcomes
+secondpass audit <job_id>
 
-python -m app.cli search-memory "user can read someone else's data"
-python -m app.cli search-web "OWASP broken access control A01"
+secondpass search-memory "user can read someone else's data"
+secondpass search-web "OWASP broken access control A01"
 ```
 
 Use either `review <path>` **or** `review --diff`, not both. For directories, `--workers` is concurrent **file** reviews; Security and Architecture still both run per file.
@@ -198,6 +201,7 @@ secondpass/
 ├── tests/
 ├── security_lessons.json
 ├── requirements.txt
+├── pyproject.toml            # local `pip install -e .` → `secondpass` CLI
 ├── .env.example
 ├── ARCHITECTURE.md
 ├── Phase3_PRD.md
