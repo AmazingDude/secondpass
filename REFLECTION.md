@@ -85,7 +85,7 @@ A sharper caveat than “maybe Groq benefited from practice”: the hard filters
 | Mentor-approved scope | [`Phase3_PRD.md`](Phase3_PRD.md) |
 | How AI was used effectively | This reflection + slide “How AI was used” + `prompts.md` for the raw trail |
 | Where it failed | Four Architecture modes, temperature humility, scorer inconclusive bug, audit-trail check vs assumed filter softens |
-| Demo | Live: [`DEMO.md`](DEMO.md); Drive video: [`DEMO_VIDEO.md`](DEMO_VIDEO.md) |
+| Demo | Live panel walkthrough; separate 5-minute Drive video (scripts stay local) |
 | Numbers | [`benchmark/REPORT.md`](benchmark/REPORT.md) |
 
 For this week, running locally (venv) or fully containerized meets the written bar. Public hosting is optional and not required to expose keys. Local `pip install -e .` now exposes a `secondpass` console script (same CLI as `python -m app.cli`). Publishing to public PyPI/npm is a separate, post-internship idea (name, versioning, irreversible publish), not a pre-deadline requirement.
