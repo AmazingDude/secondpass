@@ -72,7 +72,7 @@ A sharper caveat than “maybe Groq benefited from practice”: the hard filters
 2. **Hard guards beat prompt hope** when wrong accepts are costly. Same idea from near-duplicate Chroma saves through Architecture filters. When evidence is weak, prefer honest “bar not met” over silently softening the bar.
 3. **Coverage honesty is a product feature.** Inconclusive is not clean, and neither is needs_review. Claimed-but-filtered is not clean either. If the UI or scorer collapses those, you will lie to yourself in demos and reports.
 4. **Human-gated memory is the closed loop.** Gate-accepted is not human-accepted. REJECT stays SQLite-only. ACCEPT may promote to Chroma. The Supervisor never auto-saves.
-5. **Be honest about small N.** Planted 1.0/1.0 and real-world N=4 show progress on *these* shapes. They are not calibrated accuracy on arbitrary repos. Confidence buckets are a method; today’s scored suites still sit high, so we have not shown discrimination across buckets yet.
+5. **Be honest about small N.** Planted 1.0/1.0 and real-world N=4 show progress on *these* shapes. They are not calibrated accuracy on arbitrary repos. Confidence buckets are a method; today’s scored suites still sit high, so we have not shown discrimination across buckets yet. Mentor-requested live probe (2026-08-13): 8 public/real files (3 known CVEs + 5 library/control, including Django DetailView as a “looks like IDOR but isn’t” trap). All matched expected behavior. Real-bug confidence was 100 every time. Third independent confirmation of zero data points in 70-79. Detection held; the gate still never had to decide.
 6. **AI speeds implementation and can mislead on unverified claims.** The internship value was learning when to trust the agent, when to re-run the benchmark, and when to write a hard filter.
 
 ---
@@ -85,7 +85,7 @@ A sharper caveat than “maybe Groq benefited from practice”: the hard filters
 | Mentor-approved scope | [`Phase3_PRD.md`](Phase3_PRD.md) |
 | How AI was used effectively | This reflection + slide “How AI was used” + `prompts.md` for the raw trail |
 | Where it failed | Four Architecture modes, temperature humility, scorer inconclusive bug, audit-trail check vs assumed filter softens |
-| Demo | Live: [`DEMO.md`](DEMO.md); Drive video: [`DEMO_VIDEO.md`](DEMO_VIDEO.md) |
+| Demo | Live panel walkthrough; separate 5-minute Drive video (scripts stay local) |
 | Numbers | [`benchmark/REPORT.md`](benchmark/REPORT.md) |
 
-For this week, running locally (venv) or fully containerized meets the written bar. Public hosting is optional and not required to expose keys. A local `pip install -e .` CLI entry point is a cheap, safe follow-up after rehearsal. Publishing to public PyPI/npm is a separate, post-internship idea (name, versioning, irreversible publish), not a pre-deadline requirement.
+For this week, running locally (venv) or fully containerized meets the written bar. Public hosting is optional and not required to expose keys. Local `pip install -e .` now exposes a `secondpass` console script (same CLI as `python -m app.cli`). Publishing to public PyPI/npm is a separate, post-internship idea (name, versioning, irreversible publish), not a pre-deadline requirement.

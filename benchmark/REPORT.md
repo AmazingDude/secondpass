@@ -541,9 +541,6 @@ cohort/run” for accepted layering under both providers is **not**
   gitignored — does not clobber OpenAI payload)
 - `benchmark/REPORT.md` (this file; §1 real-world A/B, §5 dual-provider
   buckets, §6 / §6b qualitative OSS)
-- `DEMO_STUDY.md` — §8 note updated with §6 lesson + §6b OpenAI-vs-Groq
-  panel lines
-
 No detection logic, `Finding` schema semantics, confidence gate threshold,
 or Architecture filters were modified for this step.
 

@@ -1049,8 +1049,13 @@ def audit_cmd(
     console.print(table)
 
 
-if __name__ == "__main__":
+def run() -> None:
+    """Console-script entry (`secondpass`) and ``python -m app.cli`` entry."""
     # Click's Windows default expands ``*`` / ``**`` in argv against cwd before
     # Typer sees them. That breaks --include/--exclude, which are intentional
     # globs we match against root-relative paths in app.multifile.
     app(windows_expand_args=False)
+
+
+if __name__ == "__main__":
+    run()
