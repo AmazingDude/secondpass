@@ -518,9 +518,6 @@ def _empty_report(
         if source_truncated
         else None
     )
-    status = logic_review_status
-    if status is None:
-        status = "inconclusive" if inconclusive else "clean"
     return {
         "path": target,
         "provider": os.getenv("LLM_PROVIDER", "groq"),
@@ -532,7 +529,7 @@ def _empty_report(
         "used_logic_review": used_logic_review or used_logic_fallback,
         "no_issues": not inconclusive,
         "inconclusive": inconclusive,
-        "logic_review_status": status,
+        "logic_review_status": logic_review_status,
         "source_truncated": source_truncated,
         "source_truncated_note": truncated_note,
         "message": message,
@@ -591,7 +588,7 @@ def review_code(
         # Legacy flag: logic ran because static was empty/unavailable.
         used_logic_fallback = scan_empty
         _emit_stage(on_stage, "logic_review")
-        if scan_error:
+        if scan_error is not None:
             scan_note = (
                 f"Static scan unavailable ({scan_error}). Review the source carefully."
             )
@@ -616,33 +613,26 @@ def review_code(
 
     findings = [*scan_findings, *logic_findings]
     structured_findings = [*structured_from_scan, *logic_structured]
+    inconclusive = scan_error is not None or logic_inconclusive
+    incomplete_message = logic_summary or "inconclusive — logic review could not complete"
+    if scan_error is not None:
+        incomplete_message = "inconclusive — static scan could not complete."
+        if logic_inconclusive and logic_summary:
+            incomplete_message += f" {logic_summary}"
 
     if not findings:
         _emit_stage(on_stage, "building_report")
-        if logic_inconclusive:
-            return _empty_report(
-                target,
-                scan_error=scan_error,
-                scan_empty=scan_empty,
-                used_logic_fallback=used_logic_fallback,
-                used_logic_review=used_logic_review,
-                message=logic_summary or "inconclusive — logic review could not complete",
-                tool_call_failures=logic_failures,
-                inconclusive=True,
-                source_truncated=source_truncated,
-                logic_review_status=logic_review_status or "inconclusive",
-            )
         return _empty_report(
             target,
             scan_error=scan_error,
             scan_empty=scan_empty,
             used_logic_fallback=used_logic_fallback,
             used_logic_review=used_logic_review,
-            message=logic_summary or "No security issues found.",
+            message=incomplete_message if inconclusive else (logic_summary or "No security issues found."),
             tool_call_failures=logic_failures,
-            inconclusive=False,
+            inconclusive=inconclusive,
             source_truncated=source_truncated,
-            logic_review_status=logic_review_status or ("clean" if used_logic_review else None),
+            logic_review_status=logic_review_status,
         )
 
     if findings:
@@ -656,7 +646,7 @@ def review_code(
         target,
         reviewed,
         structured_findings,
-        coverage_status="inconclusive" if logic_inconclusive else "ok",
+        coverage_status="inconclusive" if inconclusive else "ok",
     )
     truncated_note = (
         f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
@@ -664,8 +654,8 @@ def review_code(
         else None
     )
     message: str | None
-    if logic_inconclusive:
-        message = logic_summary or "inconclusive — logic review could not complete"
+    if inconclusive:
+        message = incomplete_message
     elif used_logic_review and logic_summary and logic_findings:
         message = logic_summary
     elif not reviewed:
@@ -682,8 +672,8 @@ def review_code(
         "static_scan_error": scan_error,
         "used_logic_fallback": used_logic_fallback,
         "used_logic_review": used_logic_review,
-        "no_issues": len(reviewed) == 0 and not logic_inconclusive,
-        "inconclusive": logic_inconclusive,
+        "no_issues": len(reviewed) == 0 and not inconclusive,
+        "inconclusive": inconclusive,
         "logic_review_status": logic_review_status
         or ("issues" if logic_findings else ("clean" if used_logic_review else None)),
         "source_truncated": source_truncated,
