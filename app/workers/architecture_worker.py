@@ -15,8 +15,8 @@ from app.context import (
 )
 from app.hooks import agent_scope, log_agent_event
 from app.llm import LLMRateLimitedError, chat
+from app.review_response import parse_review_response
 from app.schema import Finding as StructuredFinding
-from app.workers.common import extract_json_object
 
 _MAX_SOURCE_CHARS = 8000
 _SOFT_SMELL_TYPES = frozenset({"naming_convention", "duplicated_logic"})
@@ -604,17 +604,26 @@ def run_architecture_worker(
                 "inconclusive": True,
             }
 
-        content = response.choices[0].message.content or ""
-        parsed = extract_json_object(content) or {}
-        has_issues = bool(parsed.get("has_issues"))
-        summary = str(parsed.get("summary") or "").strip()
-        raw_issues = parsed.get("issues") if isinstance(parsed.get("issues"), list) else []
+        try:
+            parsed = parse_review_response(response)
+        except ValueError:
+            log_agent_event("architecture_worker inconclusive — invalid model response")
+            return {
+                "has_issues": False,
+                "summary": "inconclusive — invalid model response",
+                "structured_findings": [],
+                "context_files": context_summary,
+                "failures": failures + 1,
+                "claim_unverified": False,
+                "inconclusive": True,
+            }
+        has_issues = parsed.has_issues
+        summary = parsed.summary
+        raw_issues = [issue.model_dump() for issue in parsed.issues]
 
         structured_findings: list[StructuredFinding] = []
         if has_issues:
             for issue in raw_issues:
-                if not isinstance(issue, dict):
-                    continue
                 finding = _issue_to_finding(
                     target_path,
                     issue,
@@ -633,12 +642,11 @@ def run_architecture_worker(
             claim_unverified = True
             log_agent_event(
                 "architecture_worker claimed issues but none met the evidence bar; "
-                f"llm_summary={summary or '(empty)'}"
+                f"llm_summary={summary}"
             )
             summary = CLAIM_UNVERIFIED_SUMMARY
             log_agent_event(f"architecture_worker: claim_unverified — {summary}")
         elif not has_issues:
-            summary = summary or "No architecture issues found."
             log_agent_event(f"architecture_worker: clean — {summary}")
         else:
             log_agent_event(

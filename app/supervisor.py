@@ -287,7 +287,10 @@ def aggregate_worker_reports(
     tool_failures = int(security_report.get("tool_call_failures") or 0) + int(
         (architecture_report or {}).get("tool_call_failures") or 0
     )
-    security_inconclusive = bool(security_report.get("inconclusive"))
+    inconclusive = bool(
+        security_report.get("inconclusive")
+        or (architecture_report or {}).get("inconclusive")
+    )
     architecture_claim_unverified = bool(
         (architecture_report or {}).get("claim_unverified")
     )
@@ -303,9 +306,9 @@ def aggregate_worker_reports(
         "architecture_skipped": arch_skipped,
         "no_issues": overall_accepted == 0
         and overall_needs == 0
-        and not security_inconclusive
+        and not inconclusive
         and not architecture_claim_unverified,
-        "inconclusive": security_inconclusive,
+        "inconclusive": inconclusive,
         "claim_unverified": architecture_claim_unverified,
         "workers_run": workers_run,
         "tool_call_failures": tool_failures,

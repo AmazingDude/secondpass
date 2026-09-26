@@ -169,10 +169,15 @@ def test_bucket_occupancy_by_worker_counts_per_worker() -> None:
 
 def test_run_qualitative_oss_end_to_end_preserves_all_outcome_kinds(tmp_path: Path) -> None:
     """Fake a full cohort run covering ok/zero-finding/claim-unverified/error/inconclusive."""
+    # The runner needs existing paths, not the developer's ignored OSS downloads.
+    alpha = tmp_path / "werkzeug_security.py"
+    beta = tmp_path / "tqdm_utils.py"
+    alpha.write_text("x = 1\n", encoding="utf-8")
+    beta.write_text("x = 2\n", encoding="utf-8")
     cohort = (
-        {"project": "alpha", "file_path": "smoke_test_external/werkzeug_security.py"},
-        {"project": "beta", "file_path": "smoke_test_external/tqdm_utils.py"},
-        {"project": "missing", "file_path": "smoke_test_external/does_not_exist.py"},
+        {"project": "alpha", "file_path": str(alpha)},
+        {"project": "beta", "file_path": str(beta)},
+        {"project": "missing", "file_path": str(tmp_path / "does_not_exist.py")},
     )
 
     def fake_security(path: str) -> dict:
@@ -236,9 +241,7 @@ def test_run_qualitative_oss_end_to_end_preserves_all_outcome_kinds(tmp_path: Pa
     assert payload["item_records"][0]["provider"] == payload["provider"]
 
     assert len(payload["claim_unverified_records"]) == 1
-    assert payload["claim_unverified_records"][0]["source_file"] == (
-        "smoke_test_external/werkzeug_security.py"
-    )
+    assert Path(payload["claim_unverified_records"][0]["source_file"]) == alpha
 
     # Bucket occupancy reflects the one security finding at 90.
     assert payload["bucket_occupancy_by_worker"]["security"]["90-100"] == 1
