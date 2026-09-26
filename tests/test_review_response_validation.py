@@ -1,4 +1,4 @@
-"""Provider failures must remain visible through the public review interfaces."""
+"""Incomplete reviews must remain visible through the public review interfaces."""
 
 import json
 from pathlib import Path
@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent import review_architecture, review_code
+from app.llm import LLMRateLimitedError
 from app.scanner import ScanError
 from app.supervisor import supervise_review
 
@@ -164,6 +165,31 @@ def test_supervisor_preserves_static_failure_with_clean_or_failed_logic(
     assert report["architecture"]["review_result"]["coverage_status"] == "ok"
 
 
+@pytest.mark.parametrize("review,limit", [(review_code, 12000), (review_architecture, 8000)])
+@pytest.mark.parametrize("extra_chars,expected_truncated", [(-1, False), (0, False), (1, True)])
+def test_target_source_limit_controls_review_coverage(
+    target: Path, monkeypatch, review, limit: int,
+    extra_chars: int, expected_truncated: bool,
+) -> None:
+    target.write_text("#" + "α" * (limit + extra_chars - 1), encoding="utf-8")
+    clean = _response('{"has_issues": false, "summary": "No issues found.", "issues": []}')
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: clean)
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: clean)
+
+    report = review(str(target))
+
+    assert report["inconclusive"] is expected_truncated
+    assert report["no_issues"] is (not expected_truncated)
+    assert report["review_result"]["coverage_status"] == ("inconclusive" if expected_truncated else "ok")
+    assert report["source_truncated"] is expected_truncated
+    assert report["tool_call_failures"] == 0
+    if expected_truncated:
+        assert str(limit) in report["source_truncated_note"]
+        assert "inconclusive" in report["message"]
+    else:
+        assert report["source_truncated_note"] is None
+
+
 @pytest.mark.parametrize("logic_has_issues,source_reviewable,expected_logic_status", [
     (False, True, "clean"), (True, True, "issues"), (False, False, None),
 ])
@@ -218,6 +244,52 @@ def test_static_scan_failure_is_inconclusive_without_discarding_logic_result(
         assert finding["detection_method"] == "llm_reasoning"
 
 
+@pytest.mark.parametrize("review,finding_type,explanation", [
+    (review_code, "command_injection", "Issue confirmed in excerpt."),
+    (review_architecture, "duplicated_logic", "Issue found in the analyzed source."),
+])
+@pytest.mark.parametrize("confidence,accepted,needs_review", [(90, 1, 0), (60, 0, 1)])
+def test_clipped_review_keeps_findings_and_confidence_gate(
+    target: Path, monkeypatch, review, finding_type: str, explanation: str,
+    confidence: int, accepted: int, needs_review: int,
+) -> None:
+    target.write_text(
+        "import os\ndef first(command):\n    return os.system(command)\n"
+        "def second(command):\n    return os.system(command)\n#" + "x" * 12000,
+        encoding="utf-8",
+    )
+    response = _response(json.dumps({
+        "has_issues": True,
+        "summary": "Issue found in the analyzed source.",
+        "issues": [{
+            "finding_type": finding_type,
+            "confidence": confidence,
+            "message": "Functions first and second have near-identical shell execution bodies.",
+            "evidence": "Both functions return os.system(command).",
+            "snippet": "return os.system(command)",
+            "suggested_fix": "Use one shared implementation with allowlisted arguments.",
+        }],
+    }))
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: response)
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: response)
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Issue confirmed in excerpt."}'
+    ))
+
+    report = review(str(target))
+
+    assert report["inconclusive"] is True
+    assert report["no_issues"] is False
+    assert report["source_truncated"] is True
+    assert "inconclusive" in report["message"]
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["accepted_count"] == accepted
+    assert report["needs_review_count"] == needs_review
+    assert report["review_result"]["findings"][0]["finding_type"] == finding_type
+    assert report["review_result"]["findings"][0]["confidence"] == confidence
+    assert explanation in report["all_findings"][0]["explanation"]
+
+
 @pytest.mark.parametrize("review", [review_code, review_architecture])
 @pytest.mark.parametrize("response", [
     _response("not JSON"),
@@ -256,3 +328,74 @@ def test_review_requires_a_complete_consistent_response(
     assert report["review_result"]["coverage_status"] == "inconclusive"
     assert report["tool_call_failures"] == 1
     assert "invalid model response" in report["message"]
+
+
+@pytest.mark.parametrize("source_chars,security_clipped,architecture_clipped", [
+    (8000, False, False), (8001, False, True),
+    (12000, False, True), (12001, True, True),
+])
+@pytest.mark.parametrize("with_static_finding", [False, True])
+def test_supervisor_keeps_clipped_coverage_and_static_findings(
+    target: Path, monkeypatch, source_chars: int,
+    security_clipped: bool, architecture_clipped: bool, with_static_finding: bool,
+) -> None:
+    prefix = "def answer():\n    return 42\n#"
+    target.write_text(prefix + "x" * (source_chars - len(prefix)), encoding="utf-8")
+    clean = _response('{"has_issues": false, "summary": "No issues found.", "issues": []}')
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: clean)
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: clean)
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+    if with_static_finding:
+        monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [{
+            "rule_id": "test.static-match", "severity": "WARNING",
+            "path": str(target), "line": 2, "message": "Static rule matched.",
+            "snippet": "return 42",
+        }])
+
+    report = supervise_review(str(target))
+
+    assert report["security"]["source_truncated"] is security_clipped
+    assert report["security"]["inconclusive"] is security_clipped
+    assert report["security"]["logic_review_status"] == ("inconclusive" if security_clipped else "clean")
+    assert report["architecture"]["source_truncated"] is architecture_clipped
+    assert report["architecture"]["inconclusive"] is architecture_clipped
+    # The architecture window is smaller, so it clips in every incomplete case here.
+    assert report["summary"]["inconclusive"] is architecture_clipped
+    assert report["summary"]["no_issues"] is (not architecture_clipped and not with_static_finding)
+    assert report["summary"]["accepted_count"] == (1 if with_static_finding else 0)
+    if with_static_finding:
+        finding = report["security"]["accepted"][0]["structured_finding"]
+        assert finding["finding_type"] == "test.static-match"
+        assert finding["detection_method"] == "static_rule"
+
+
+@pytest.mark.parametrize("review", [review_code, review_architecture])
+@pytest.mark.parametrize("response,reason", [
+    (_response("not JSON"), "invalid model response"),
+    (LLMRateLimitedError("rate limited"), "rate limited"),
+    (RuntimeError("provider down"), "could not complete"),
+])
+def test_clipped_source_does_not_hide_model_failure(
+    target: Path, monkeypatch, review, response, reason: str,
+) -> None:
+    target.write_text("#" + "x" * 12000, encoding="utf-8")
+
+    def chat(*args, **kwargs):
+        if isinstance(response, Exception):
+            raise response
+        return response
+
+    monkeypatch.setattr("app.agent.chat", chat)
+    monkeypatch.setattr("app.workers.architecture_worker.chat", chat)
+
+    report = review(str(target))
+
+    assert report["source_truncated"] is True
+    assert report["source_truncated_note"]
+    assert report["inconclusive"] is True
+    assert report["no_issues"] is False
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["tool_call_failures"] == 1
+    assert reason in report["message"]
