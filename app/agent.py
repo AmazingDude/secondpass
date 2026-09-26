@@ -348,8 +348,6 @@ def assess_logic_review(
         if has_issues:
             for issue in raw_issues:
                 message = str(issue.get("message") or "").strip()
-                if not message:
-                    continue
                 finding_type = str(issue.get("finding_type") or "").strip()
                 suggested_fix = str(issue.get("suggested_fix") or "").strip()
                 snippet = str(issue.get("snippet") or "").strip()
@@ -379,13 +377,11 @@ def assess_logic_review(
         # Guard: model claimed issues but gave nothing specific → clean.
         if has_issues and not findings:
             has_issues = False
-            summary = summary or "No security issues found."
             log_agent_event(
                 "logic-review claimed issues but produced none specific; treating as clean"
             )
 
         if not has_issues:
-            summary = summary or "No security issues found."
             log_agent_event(f"logic-review: clean — {summary}")
             return {
                 "has_issues": False,
@@ -401,7 +397,7 @@ def assess_logic_review(
         log_agent_event(f"logic-review: {len(findings)} concrete issue(s) — {summary}")
         return {
             "has_issues": True,
-            "summary": summary or f"{len(findings)} logic issue(s) identified",
+            "summary": summary,
             "findings": findings,
             "structured_findings": structured_findings,
             "failures": failures,

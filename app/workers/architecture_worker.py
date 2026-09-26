@@ -642,12 +642,11 @@ def run_architecture_worker(
             claim_unverified = True
             log_agent_event(
                 "architecture_worker claimed issues but none met the evidence bar; "
-                f"llm_summary={summary or '(empty)'}"
+                f"llm_summary={summary}"
             )
             summary = CLAIM_UNVERIFIED_SUMMARY
             log_agent_event(f"architecture_worker: claim_unverified — {summary}")
         elif not has_issues:
-            summary = summary or "No architecture issues found."
             log_agent_event(f"architecture_worker: clean — {summary}")
         else:
             log_agent_event(

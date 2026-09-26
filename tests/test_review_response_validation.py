@@ -33,18 +33,6 @@ def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def test_security_invalid_json_is_inconclusive(target: Path, monkeypatch) -> None:
-    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response("not JSON"))
-
-    report = review_code(str(target))
-
-    assert report["inconclusive"] is True
-    assert report["no_issues"] is False
-    assert report["review_result"]["coverage_status"] == "inconclusive"
-    assert report["tool_call_failures"] == 1
-    assert "invalid model response" in report["message"]
-
-
 @pytest.mark.parametrize("review", [review_code, review_architecture])
 @pytest.mark.parametrize("issue", [
     {},
@@ -183,3 +171,4 @@ def test_review_requires_a_complete_consistent_response(
     assert report["inconclusive"] is True
     assert report["review_result"]["coverage_status"] == "inconclusive"
     assert report["tool_call_failures"] == 1
+    assert "invalid model response" in report["message"]
