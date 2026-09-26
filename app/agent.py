@@ -13,13 +13,13 @@ from app.gitdiff import ChangedFile, finding_in_changed_lines
 from app.hooks import agent_scope, log_agent_event
 from app.llm import LLMRateLimitedError, chat
 from app.memory import seed_memory
+from app.review_response import parse_review_response
 from app.scanner import Finding as ScannerFinding
 from app.scanner import ScanError, run_static_scan
 from app.schema import Finding as StructuredFinding
 from app.schema import ReviewResult
 from app.supervisor import supervise_finding
 from app.workers.architecture_worker import run_architecture_worker
-from app.workers.common import extract_json_object
 
 StageCallback = Callable[[str], None]
 
@@ -321,18 +321,32 @@ def assess_logic_review(
                 "status": "inconclusive",
             }
 
-        content = response.choices[0].message.content or ""
-        parsed = extract_json_object(content) or {}
-        has_issues = bool(parsed.get("has_issues"))
-        summary = str(parsed.get("summary") or "").strip()
-        raw_issues = parsed.get("issues") if isinstance(parsed.get("issues"), list) else []
+        try:
+            parsed = parse_review_response(response)
+            if parsed.has_issues and (
+                not parsed.issues or any(not issue.message for issue in parsed.issues)
+            ):
+                raise ValueError("Security claim requires described issues")
+        except ValueError:
+            log_agent_event("logic-review inconclusive — invalid model response")
+            return {
+                "has_issues": False,
+                "summary": "inconclusive — invalid model response",
+                "findings": [],
+                "structured_findings": [],
+                "failures": failures + 1,
+                "inconclusive": True,
+                "source_truncated": source_truncated,
+                "status": "inconclusive",
+            }
+        has_issues = parsed.has_issues
+        summary = parsed.summary
+        raw_issues = [issue.model_dump() for issue in parsed.issues]
 
         findings: list[ScannerFinding] = []
         structured_findings: list[StructuredFinding] = []
         if has_issues:
             for issue in raw_issues:
-                if not isinstance(issue, dict):
-                    continue
                 message = str(issue.get("message") or "").strip()
                 if not message:
                     continue
