@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from types import SimpleNamespace
-from typing import Any
 
 import pytest
 
@@ -54,40 +53,3 @@ def test_run_static_scan_network_failure_raises_clean_scan_error(monkeypatch) ->
         "Semgrep scan failed: network error, falling back to logic-review"
     )
     assert "Traceback" not in str(exc_info.value)
-
-
-def test_review_code_surfaces_clean_semgrep_message(monkeypatch, tmp_path) -> None:
-    target = tmp_path / "clean.py"
-    target.write_text("def ok():\n    return 1\n", encoding="utf-8")
-
-    def _fail(_paths: list[str]) -> Any:
-        raise ScanError(
-            "Semgrep scan failed: network error, falling back to logic-review"
-        )
-
-    monkeypatch.setattr("app.agent.run_static_scan", _fail)
-    monkeypatch.setattr(
-        "app.agent.assess_logic_review",
-        lambda path, scan_note=None: {
-            "has_issues": False,
-            "summary": "No security issues found.",
-            "findings": [],
-            "structured_findings": [],
-            "failures": 0,
-            "inconclusive": False,
-            "source_truncated": False,
-            "status": "clean",
-        },
-    )
-    monkeypatch.setattr("app.agent.seed_memory", lambda: None)
-
-    from app.agent import review_code
-
-    report = review_code(str(target))
-    assert report["static_scan_error"] == (
-        "Semgrep scan failed: network error, falling back to logic-review"
-    )
-    assert "Traceback" not in (report["static_scan_error"] or "")
-    assert report.get("used_logic_fallback") is True
-    assert report.get("inconclusive") is False
-    assert report.get("no_issues") is True

@@ -7,6 +7,7 @@ from types import SimpleNamespace
 import pytest
 
 from app.agent import review_architecture, review_code
+from app.scanner import ScanError
 from app.supervisor import supervise_review
 
 
@@ -132,6 +133,89 @@ def test_completed_clean_response_remains_clean(target: Path, monkeypatch, revie
     assert report["inconclusive"] is False
     assert report["review_result"]["coverage_status"] == "ok"
     assert report["tool_call_failures"] == 0
+
+
+@pytest.mark.parametrize("scan_error", ["Semgrep unavailable", ""])
+@pytest.mark.parametrize("logic_completed", [False, True])
+def test_supervisor_preserves_static_failure_with_clean_or_failed_logic(
+    target: Path, monkeypatch, scan_error: str, logic_completed: bool,
+) -> None:
+    def fail_scan(paths):
+        raise ScanError(scan_error)
+
+    clean = _response('{"has_issues": false, "summary": "No issues found.", "issues": []}')
+    invalid = _response("not JSON")
+    monkeypatch.setattr("app.agent.run_static_scan", fail_scan)
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: clean if logic_completed else invalid)
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: clean)
+
+    report = supervise_review(str(target))
+
+    assert report["summary"]["inconclusive"] is True
+    assert report["summary"]["no_issues"] is False
+    assert report["summary"]["finding_count"] == 0
+    assert report["security"]["static_scan_error"] == scan_error
+    assert report["security"]["static_scan_empty"] is False
+    assert report["security"]["review_result"]["coverage_status"] == "inconclusive"
+    assert report["security"]["logic_review_status"] == ("clean" if logic_completed else "inconclusive")
+    assert "static scan could not complete" in report["security"]["message"]
+    if not logic_completed:
+        assert "invalid model response" in report["security"]["message"]
+    assert report["architecture"]["review_result"]["coverage_status"] == "ok"
+
+
+@pytest.mark.parametrize("logic_has_issues,source_reviewable,expected_logic_status", [
+    (False, True, "clean"), (True, True, "issues"), (False, False, None),
+])
+def test_static_scan_failure_is_inconclusive_without_discarding_logic_result(
+    target: Path, monkeypatch, logic_has_issues: bool,
+    source_reviewable: bool, expected_logic_status: str | None,
+) -> None:
+    source = "import os\ndef run(command):\n    return os.system(command)\n" if source_reviewable else ""
+    target.write_text(source, encoding="utf-8")
+    issues = [{
+        "message": "Untrusted command reaches the shell.",
+        "finding_type": "command_injection",
+        "line": 3,
+        "snippet": "return os.system(command)",
+        "confidence": 90,
+        "suggested_fix": "Pass allowlisted arguments without a shell.",
+    }] if logic_has_issues else []
+
+    def fail_scan(paths):
+        raise ScanError(
+            "Semgrep scan failed: network error, falling back to logic-review"
+        )
+
+    monkeypatch.setattr("app.agent.run_static_scan", fail_scan)
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(json.dumps({
+        "has_issues": logic_has_issues,
+        "summary": "Command injection found." if logic_has_issues else "No security issues found.",
+        "issues": issues,
+    })))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, '
+        '"explanation": "Untrusted command reaches the shell.", '
+        '"suggested_fix": "Pass allowlisted arguments without a shell."}'
+    ))
+
+    report = review_code(str(target))
+
+    assert report["static_scan_error"] == (
+        "Semgrep scan failed: network error, falling back to logic-review"
+    )
+    assert "Traceback" not in report["static_scan_error"]
+    assert report["used_logic_fallback"] is source_reviewable
+    assert report["inconclusive"] is True
+    assert report["no_issues"] is False
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["logic_review_status"] == expected_logic_status
+    assert "static scan could not complete" in report["message"]
+    assert report["finding_count"] == (1 if logic_has_issues else 0)
+    if logic_has_issues:
+        finding = report["accepted"][0]["structured_finding"]
+        assert finding["finding_type"] == "command_injection"
+        assert finding["detection_method"] == "llm_reasoning"
 
 
 @pytest.mark.parametrize("review", [review_code, review_architecture])

@@ -35,8 +35,9 @@ class ReviewResult(BaseModel):
     file_path: str
     timestamp: datetime
     worker_name: str
-    # Optional coverage signal (Security path). Distinct from gate needs_review:
-    # inconclusive = logic review did not complete (e.g. rate limit); None/ok = checked.
+    # Optional coverage signal, distinct from gate needs_review:
+    # inconclusive = a required review stage did not complete; ok = checked.
+    # None is a legacy result with no explicit coverage signal.
     coverage_status: Literal["ok", "inconclusive"] | None = None
     # Architecture honesty: LLM claimed issue(s) that every post-filter dropped.
     # Distinct from clean (nothing claimed) and from inconclusive (incomplete).
