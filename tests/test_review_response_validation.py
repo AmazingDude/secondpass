@@ -1,12 +1,14 @@
 """Incomplete reviews must remain visible through the public review interfaces."""
 
 import json
+import subprocess
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 
-from app.agent import review_architecture, review_code
+from app.agent import review_architecture, review_changed_files, review_code
+from app.gitdiff import ChangedFile
 from app.llm import LLMRateLimitedError
 from app.scanner import ScanError
 from app.supervisor import supervise_review
@@ -74,6 +76,219 @@ def test_security_claim_requires_described_issues(target: Path, monkeypatch, iss
 
     assert report["no_issues"] is False
     assert report["inconclusive"] is True
+
+
+@pytest.fixture()
+def filtered_security_target(target: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(json.dumps({
+        "has_issues": True,
+        "summary": "Handler bypasses the service layer.",
+        "issues": [{
+            "line": 2,
+            "finding_type": "layering_violation",
+            "message": "Handler bypasses the service layer.",
+            "snippet": "return 42",
+            "confidence": 90,
+            "suggested_fix": "Move business rules into the service layer.",
+        }],
+    })))
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: _response(
+        '{"has_issues": false, "summary": "No architecture issues.", "issues": []}'
+    ))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+    return target
+
+
+def test_filtered_security_claim_is_not_clean(filtered_security_target: Path) -> None:
+    report = review_code(str(filtered_security_target))
+
+    assert report["no_issues"] is False
+    assert report["claim_unverified"] is True
+    assert report["logic_review_status"] == "unverified"
+    assert report["inconclusive"] is False
+    assert report["review_result"]["claim_status"] == "unverified"
+    assert report["review_result"]["coverage_status"] == "ok"
+    assert report["all_findings"] == []
+    assert report["tool_call_failures"] == 0
+    assert "unverified" in report["message"]
+
+
+@pytest.fixture()
+def static_match(target: Path) -> list[dict]:
+    return [{
+        "rule_id": "test.static-match", "severity": "WARNING",
+        "path": str(target), "line": 2,
+        "message": "Static rule matched.", "snippet": "return 42",
+    }]
+
+
+def test_filtered_security_claim_preserves_static_findings(
+    filtered_security_target: Path, monkeypatch, static_match,
+) -> None:
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: static_match)
+
+    report = review_code(str(filtered_security_target))
+
+    assert report["claim_unverified"] is True
+    assert report["review_result"]["claim_status"] == "unverified"
+    assert report["accepted_count"] == 1
+    assert report["needs_review_count"] == 0
+    assert report["all_findings"][0]["structured_finding"]["finding_type"] == "test.static-match"
+    assert "unverified" in report["message"]
+
+
+def test_supervisor_preserves_filtered_security_claim(filtered_security_target: Path) -> None:
+    report = supervise_review(str(filtered_security_target))
+
+    assert report["summary"]["no_issues"] is False
+    assert report["summary"]["claim_unverified"] is True
+    assert report["summary"]["inconclusive"] is False
+    assert report["summary"]["finding_count"] == 0
+
+
+def test_changed_files_preserve_filtered_security_claim(filtered_security_target: Path) -> None:
+    report = review_changed_files([ChangedFile(filtered_security_target, [(2, 2)])])
+
+    assert report["no_issues"] is False
+    assert report["claim_unverified"] is True
+    assert report["review_result"]["claim_status"] == "unverified"
+    assert report["review_result"]["coverage_status"] == "ok"
+    assert report["finding_count"] == 0
+    assert "unverified" in report["message"]
+
+
+@pytest.mark.parametrize("diff", [False, True])
+@pytest.mark.parametrize("with_static_finding", [False, True])
+def test_cli_does_not_display_filtered_security_claim_as_clean(
+    filtered_security_target: Path, monkeypatch, static_match,
+    diff: bool, with_static_finding: bool,
+) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    if with_static_finding:
+        monkeypatch.setattr("app.agent.run_static_scan", lambda paths: static_match)
+    if diff:
+        monkeypatch.chdir(filtered_security_target.parent)
+        subprocess.run(["git", "init", "--quiet"], check=True)
+        subprocess.run(["git", "add", "--", filtered_security_target.name], check=True)
+    args = ["review", "--diff"] if diff else ["review", str(filtered_security_target)]
+
+    result = CliRunner().invoke(cli.app, args)
+
+    assert result.exit_code == 0, result.output
+    security_output = result.output.split("secondpass review", 1)[1].split("Architecture review", 1)[0]
+    assert "Evidence bar not met" in security_output
+    assert "No issues found" not in security_output
+    if with_static_finding:
+        assert "test.static-match" in security_output
+
+
+@pytest.mark.parametrize("incomplete_stage", ["source", "static"])
+def test_filtered_security_claim_keeps_coverage_independent(
+    filtered_security_target: Path, monkeypatch, incomplete_stage: str,
+) -> None:
+    if incomplete_stage == "source":
+        filtered_security_target.write_text("#" * 12001, encoding="utf-8")
+    else:
+        def fail_scan(paths):
+            raise ScanError("Semgrep unavailable")
+        monkeypatch.setattr("app.agent.run_static_scan", fail_scan)
+
+    report = review_code(str(filtered_security_target))
+
+    assert report["no_issues"] is False
+    assert report["claim_unverified"] is True
+    assert report["review_result"]["claim_status"] == "unverified"
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert "inconclusive" in report["message"]
+    assert "unverified" in report["message"]
+
+
+@pytest.mark.parametrize("claim_filtered", [False, True])
+@pytest.mark.parametrize("changed_line", [1, 2])
+def test_changed_files_keep_claims_separate_from_out_of_diff_findings(
+    filtered_security_target: Path, monkeypatch, static_match,
+    claim_filtered: bool, changed_line: int,
+) -> None:
+    if not claim_filtered:
+        monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(
+            '{"has_issues": false, "summary": "No issues.", "issues": []}'
+        ))
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: static_match)
+
+    report = review_changed_files([
+        ChangedFile(filtered_security_target, [(changed_line, changed_line)])
+    ])
+
+    assert report["claim_unverified"] is claim_filtered
+    assert report["no_issues"] is (not claim_filtered and changed_line == 1)
+    assert report["accepted_count"] == (1 if changed_line == 2 else 0)
+    assert report["filtered_out_findings"] == (1 if changed_line == 1 else 0)
+    if claim_filtered:
+        assert "unverified" in report["message"]
+
+
+@pytest.mark.parametrize("with_static_finding", [False, True])
+def test_changed_files_preserve_failure_and_claim_explanations(
+    target: Path, monkeypatch, static_match, with_static_finding: bool,
+) -> None:
+    failed_target = target.with_name("failed.py")
+    failed_target.write_text("value = 1\n", encoding="utf-8")
+    responses = iter([
+        _response(json.dumps({
+            "has_issues": True, "summary": "Possible issue.", "issues": [{
+                "finding_type": "layering_violation",
+                "message": "Handler bypasses the service layer.",
+            }],
+        })),
+        _response("not JSON"),
+    ])
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: next(responses))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+    if with_static_finding:
+        monkeypatch.setattr("app.agent.run_static_scan", lambda paths: (
+            static_match if str(target) in paths else []
+        ))
+
+    report = review_changed_files([
+        ChangedFile(target, [(2, 2)]), ChangedFile(failed_target, [(1, 1)])
+    ])
+
+    assert report["no_issues"] is False
+    assert report["claim_unverified"] is True
+    assert report["inconclusive"] is True
+    assert report["accepted_count"] == int(with_static_finding)
+    assert "invalid model response" in report["message"]
+    assert "unverified" in report["message"]
+
+
+@pytest.mark.parametrize("confidence,accepted,needs_review", [(90, 1, 0), (40, 0, 1)])
+def test_surviving_security_finding_keeps_its_confidence_gate(
+    filtered_security_target: Path, monkeypatch, confidence: int,
+    accepted: int, needs_review: int,
+) -> None:
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(json.dumps({
+        "has_issues": True, "summary": "Possible issues.", "issues": [
+            {"finding_type": "layering_violation", "message": "Handler bypasses the service layer."},
+            {"finding_type": "command_injection", "message": "Untrusted input reaches a shell.",
+             "line": 2, "confidence": confidence, "suggested_fix": "Avoid the shell."},
+        ],
+    })))
+
+    report = review_code(str(filtered_security_target))
+
+    assert report["claim_unverified"] is False
+    assert report["review_result"]["claim_status"] is None
+    assert report["no_issues"] is False
+    assert report["accepted_count"] == accepted
+    assert report["needs_review_count"] == needs_review
+    assert report["all_findings"][0]["structured_finding"]["finding_type"] == "command_injection"
 
 
 @pytest.mark.parametrize("security_ok,architecture_ok,expected_inconclusive", [

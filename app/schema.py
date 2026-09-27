@@ -39,6 +39,6 @@ class ReviewResult(BaseModel):
     # inconclusive = a required review stage did not complete; ok = checked.
     # None is a legacy result with no explicit coverage signal.
     coverage_status: Literal["ok", "inconclusive"] | None = None
-    # Architecture honesty: LLM claimed issue(s) that every post-filter dropped.
+    # LLM claimed issue(s) that every post-filter dropped.
     # Distinct from clean (nothing claimed) and from inconclusive (incomplete).
     claim_status: Literal["unverified"] | None = None

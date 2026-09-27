@@ -152,7 +152,7 @@ export function FindingsView({
         {claimUnverified ? (
           <span
             className="badge badge-incomplete"
-            title="Architecture claimed an issue that did not meet the evidence bar"
+            title="A reviewer claimed an issue that did not meet the evidence bar"
           >
             Evidence bar not met
           </span>
@@ -189,7 +189,7 @@ export function FindingsView({
         <div className="card clean-state">
           <span className="badge badge-incomplete">Evidence bar not met</span>
           <p className="empty-detail">
-            Architecture flagged a possible issue that didn&apos;t meet the
+            A reviewer flagged a possible issue that didn&apos;t meet the
             evidence bar — see the audit trail. This is not the same as a clean
             review, and the filtered claim is not listed as a finding.
           </p>

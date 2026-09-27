@@ -143,6 +143,13 @@ export function HistoryView({ onOpenReview }: Props) {
                         >
                           Incomplete
                         </span>
+                      ) : review.review_result.claim_status === "unverified" ? (
+                        <span
+                          className="badge badge-incomplete"
+                          title="A reviewer claimed an issue that did not meet the evidence bar"
+                        >
+                          Unverified
+                        </span>
                       ) : review.accepted_count === 0 &&
                         review.needs_review_count === 0 ? (
                         <span className="badge badge-clean">Clean</span>
