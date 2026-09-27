@@ -179,20 +179,27 @@ def test_no_eligible_after_filters(tmp_path: Path) -> None:
     assert selection.skipped_trivial_count == 1
 
 
-def test_symlink_directories_are_not_traversed(tmp_path: Path) -> None:
-    real = tmp_path / "real_pkg"
+@pytest.mark.parametrize("target_inside_root", [True, False])
+def test_symlink_directories_are_not_traversed(
+    tmp_path: Path, target_inside_root: bool
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    real = (root if target_inside_root else tmp_path) / "real_pkg"
     real.mkdir()
     (real / "hidden.py").write_text("x = 1\n", encoding="utf-8")
-    link = tmp_path / "linked_pkg"
+    link = root / "linked_pkg"
     try:
         os.symlink(real, link, target_is_directory=True)
     except OSError:
         pytest.skip("symlink creation not permitted on this host")
 
-    _write(tmp_path, "visible.py", "y = 2\n")
-    selection = select_python_files(tmp_path, max_files=10)
-    assert selection.relative_selected() == ["visible.py"]
-    assert "linked_pkg/hidden.py" not in selection.relative_selected()
+    _write(root, "visible.py", "y = 2\n")
+    selection = select_python_files(root, max_files=10)
+    expected = ["real_pkg/hidden.py", "visible.py"] if target_inside_root else ["visible.py"]
+    assert selection.relative_selected() == expected
+    assert selection.discovered_count == len(expected)
+    assert selection.junk_dirs_pruned == 1
 
 
 def test_review_python_files_sequentially_aggregates_per_file_counts(
