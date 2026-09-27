@@ -377,26 +377,25 @@ def _display_architecture_report(report: dict[str, Any]) -> None:
     needs_review = report.get("needs_review") or []
     if not accepted and not needs_review:
         claim_unverified = bool(report.get("claim_unverified"))
-        message = str(
-            report.get("message")
-            or (
+        if report.get("inconclusive"):
+            title, style = "Review incomplete", "yellow"
+            fallback = "inconclusive — Architecture review could not complete."
+        elif claim_unverified:
+            title, style = "Evidence bar not met", "yellow"
+            fallback = (
                 "Architecture flagged a possible issue that didn't meet the "
                 "evidence bar — see audit trail."
-                if claim_unverified
-                else "No architecture issues found."
             )
-        )
+        else:
+            title, style = "No issues found", "green"
+            fallback = "No architecture issues found."
+        message = str(report.get("message") or fallback)
         console.print()
         console.print(
             Panel(
-                Text(
-                    message,
-                    style="yellow" if claim_unverified else "green",
-                ),
-                title=(
-                    "Evidence bar not met" if claim_unverified else "No issues found"
-                ),
-                border_style="yellow" if claim_unverified else "green",
+                Text(message, style=style),
+                title=title,
+                border_style=style,
                 padding=(1, 2),
             )
         )

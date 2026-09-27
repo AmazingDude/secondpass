@@ -37,6 +37,138 @@ def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
+@pytest.fixture()
+def model_calls(monkeypatch):
+    calls = []
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: calls.append(a))
+    monkeypatch.setattr("app.workers.architecture_worker.chat", lambda *a, **kw: calls.append(a))
+    return calls
+
+
+def _deny_target_read(target: Path, monkeypatch) -> None:
+    original_read = Path.read_text
+
+    def denied_read(path, *args, **kwargs):
+        if path == target:
+            raise PermissionError("permission denied")
+        return original_read(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "read_text", denied_read)
+
+
+@pytest.mark.parametrize("review", [review_code, review_architecture])
+@pytest.mark.parametrize("read_error", ["missing", "permission", "encoding"])
+def test_unreadable_source_is_incomplete(target: Path, monkeypatch, model_calls, review, read_error) -> None:
+    if read_error == "missing":
+        target = target.with_name("missing.py")
+    elif read_error == "encoding":
+        target.write_bytes(b"\xff\xfe\x00")
+    else:
+        _deny_target_read(target, monkeypatch)
+
+    report = review(str(target))
+
+    assert report["no_issues"] is False
+    assert report["inconclusive"] is True
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["finding_count"] == 0
+    if review is review_code:
+        assert report["used_logic_review"] is False
+    assert report["tool_call_failures"] == 0
+    assert "source" in report["message"].lower()
+    assert model_calls == []
+
+
+@pytest.mark.parametrize("review", [review_code, review_architecture])
+@pytest.mark.parametrize("source", ["", " \n\t", " " * 12001], ids=["empty", "whitespace", "long-whitespace"])
+def test_readable_empty_source_needs_no_model(target: Path, model_calls, review, source) -> None:
+    target.write_text(source, encoding="utf-8")
+
+    report = review(str(target))
+
+    assert report["no_issues"] is True
+    assert report["inconclusive"] is False
+    assert report["review_result"]["coverage_status"] == "ok"
+    assert report["source_truncated"] is False
+    assert report["tool_call_failures"] == 0
+    assert report["message"] == "No source content to review."
+    assert model_calls == []
+
+
+@pytest.mark.parametrize("diff", [False, True])
+def test_cli_displays_unreadable_source_as_incomplete(target: Path, monkeypatch, model_calls, diff: bool) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    if diff:
+        _deny_target_read(target, monkeypatch)
+    else:
+        target.write_bytes(b"\xff\xfe\x00")
+    if diff:
+        monkeypatch.chdir(target.parent)
+        subprocess.run(["git", "init", "--quiet"], check=True)
+        subprocess.run(["git", "add", "--", target.name], check=True)
+    args = ["review", "--diff"] if diff else ["review", str(target)]
+
+    result = CliRunner().invoke(cli.app, args)
+
+    assert result.exit_code == 0, result.output
+    assert "Review incomplete" in result.output
+    assert "No issues found" not in result.output
+    rendered_text = " ".join(result.output.replace("│", " ").split())
+    assert "could not read target source" in rendered_text
+    assert model_calls == []
+
+
+@pytest.mark.parametrize("with_static_finding", [False, True])
+@pytest.mark.parametrize("static_error", [False, True])
+def test_supervisor_keeps_read_failure_and_static_results(
+    target: Path, monkeypatch, static_match, model_calls,
+    with_static_finding: bool, static_error: bool,
+) -> None:
+    target.write_bytes(b"\xff")
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+
+    def scan(paths):
+        if static_error:
+            raise ScanError("Semgrep unavailable")
+        return static_match if with_static_finding else []
+
+    monkeypatch.setattr("app.agent.run_static_scan", scan)
+
+    report = supervise_review(str(target))
+
+    assert report["summary"]["no_issues"] is False
+    assert report["summary"]["inconclusive"] is True
+    assert report["summary"]["accepted_count"] == int(with_static_finding and not static_error)
+    for worker in ["security", "architecture"]:
+        assert report[worker]["review_result"]["coverage_status"] == "inconclusive"
+        assert "could not read target source" in report[worker]["message"]
+    if static_error:
+        assert "static scan could not complete" in report["security"]["message"]
+    assert model_calls == []
+
+
+def test_changed_files_keep_read_failure_with_static_findings(target: Path, monkeypatch, static_match) -> None:
+    target.write_bytes(b"\xff")
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: static_match)
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+
+    report = review_changed_files([ChangedFile(target, [(2, 2)])])
+
+    assert report["no_issues"] is False
+    assert report["inconclusive"] is True
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["accepted_count"] == 1
+    assert report["all_findings"][0]["structured_finding"]["finding_type"] == "test.static-match"
+    assert "could not read target source" in report["message"]
+
+
 @pytest.mark.parametrize("review", [review_code, review_architecture])
 @pytest.mark.parametrize("issue", [
     {},
