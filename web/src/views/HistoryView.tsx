@@ -139,7 +139,7 @@ export function HistoryView({ onOpenReview }: Props) {
                       "inconclusive" ? (
                         <span
                           className="badge badge-incomplete"
-                          title="Logic review did not complete — not a clean result"
+                          title="One or more checks were incomplete — not a clean result"
                         >
                           Incomplete
                         </span>

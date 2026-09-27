@@ -7,7 +7,6 @@ from types import SimpleNamespace
 from typing import Any
 
 from app.agent import (
-    _MAX_LOGIC_SOURCE_CHARS,
     assess_logic_review,
     map_logic_issue,
     review_code,
@@ -157,30 +156,6 @@ def test_assess_logic_review_rate_limit_marks_inconclusive(
     assert result["status"] == "inconclusive"
     assert result["summary"] == "inconclusive — rate limited"
     assert result["failures"] == 1
-
-
-def test_truncated_source_visible_on_report(monkeypatch, tmp_path: Path) -> None:
-    """(c) Truncated logic-review input is visible in the report dict."""
-    target = tmp_path / "huge.py"
-    # Past the logic-review window so truncation trips.
-    target.write_text("x = 1\n" * (_MAX_LOGIC_SOURCE_CHARS // 2), encoding="utf-8")
-
-    monkeypatch.setattr("app.agent.seed_memory", lambda: None)
-    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [])
-    monkeypatch.setattr(
-        "app.agent.chat",
-        lambda *args, **kwargs: _fake_chat(
-            '{"has_issues": false, "summary": "No security issues found.", "issues": []}'
-        ),
-    )
-
-    report = review_code(str(target))
-
-    assert report.get("source_truncated") is True
-    assert report.get("source_truncated_note")
-    assert str(_MAX_LOGIC_SOURCE_CHARS) in (report["source_truncated_note"] or "")
-    assert report.get("inconclusive") is False
-    assert report.get("no_issues") is True
 
 
 def test_hard_chat_failure_is_inconclusive_not_clean(

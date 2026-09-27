@@ -144,7 +144,7 @@ export function FindingsView({
         {coverageIncomplete ? (
           <span
             className="badge badge-incomplete"
-            title="Logic review did not complete — not the same as a low-confidence finding"
+            title="One or more checks were incomplete — not the same as a low-confidence finding"
           >
             Coverage incomplete
           </span>
@@ -180,9 +180,9 @@ export function FindingsView({
         <div className="card clean-state">
           <span className="badge badge-incomplete">Review incomplete</span>
           <p className="empty-detail">
-            Coverage inconclusive — logic review could not complete (for
-            example rate-limited). This is not a clean result, and it is not a
-            low-confidence finding.
+            One or more checks could not complete or reviewed only part of the
+            source. This is not a clean result, and it is not a low-confidence
+            finding.
           </p>
         </div>
       ) : findings.length === 0 && claimUnverified ? (

@@ -174,14 +174,14 @@ If has_issues is false, issues MUST be an empty list.
 """
 
 
-def _read_truncated(path: str, *, max_chars: int = _MAX_SOURCE_CHARS) -> str:
+def _read_truncated(path: str, *, max_chars: int = _MAX_SOURCE_CHARS) -> tuple[str, bool]:
     try:
         source = Path(path).read_text(encoding="utf-8")
     except (OSError, UnicodeError):
-        return ""
+        return "", False
     if len(source) > max_chars:
-        return source[:max_chars] + "\n... [truncated]"
-    return source
+        return source[:max_chars] + "\n... [truncated]", True
+    return source, False
 
 
 def _bounded_confidence(value: Any, *, default: int) -> int:
@@ -534,9 +534,18 @@ def run_architecture_worker(
         "context_files": [{"path": ..., "relation": ...}, ...],
         "failures": int,
         "claim_unverified": bool,
+        "source_truncated": bool,
+        "source_truncated_note": str | None,
       }
     """
-    target_source = _read_truncated(target_path)
+    target_source, source_truncated = _read_truncated(target_path)
+    source_coverage = {
+        "source_truncated": source_truncated,
+        "source_truncated_note": (
+            f"Architecture review saw only the first {_MAX_SOURCE_CHARS} characters of the target source."
+            if source_truncated else None
+        ),
+    }
     if not target_source.strip():
         return {
             "has_issues": False,
@@ -546,6 +555,7 @@ def run_architecture_worker(
             "failures": 0,
             "claim_unverified": False,
             "inconclusive": False,
+            **source_coverage,
         }
 
     context_files = gather_cross_file_context(
@@ -588,6 +598,7 @@ def run_architecture_worker(
                 "failures": failures,
                 "claim_unverified": False,
                 "inconclusive": True,
+                **source_coverage,
             }
         except Exception as exc:  # noqa: BLE001
             failures += 1
@@ -602,6 +613,7 @@ def run_architecture_worker(
                 "failures": failures,
                 "claim_unverified": False,
                 "inconclusive": True,
+                **source_coverage,
             }
 
         try:
@@ -616,6 +628,7 @@ def run_architecture_worker(
                 "failures": failures + 1,
                 "claim_unverified": False,
                 "inconclusive": True,
+                **source_coverage,
             }
         has_issues = parsed.has_issues
         summary = parsed.summary
@@ -645,9 +658,18 @@ def run_architecture_worker(
                 f"llm_summary={summary}"
             )
             summary = CLAIM_UNVERIFIED_SUMMARY
+
+        if source_truncated:
+            summary = (
+                f"inconclusive — {source_coverage['source_truncated_note']} "
+                f"Assessment of the analyzed excerpt: {summary}"
+            )
+
+        if claim_unverified:
             log_agent_event(f"architecture_worker: claim_unverified — {summary}")
         elif not has_issues:
-            log_agent_event(f"architecture_worker: clean — {summary}")
+            status = "inconclusive" if source_truncated else "clean"
+            log_agent_event(f"architecture_worker: {status} — {summary}")
         else:
             log_agent_event(
                 f"architecture_worker: {len(structured_findings)} issue(s) — {summary}"
@@ -660,5 +682,6 @@ def run_architecture_worker(
             "context_files": context_summary,
             "failures": failures,
             "claim_unverified": claim_unverified,
-            "inconclusive": False,
+            "inconclusive": source_truncated,
+            **source_coverage,
         }

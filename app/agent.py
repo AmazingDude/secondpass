@@ -381,17 +381,24 @@ def assess_logic_review(
                 "logic-review claimed issues but produced none specific; treating as clean"
             )
 
+        if source_truncated:
+            summary = (
+                f"inconclusive — logic review saw only the first {_MAX_LOGIC_SOURCE_CHARS} "
+                "characters of the target source."
+            )
+
         if not has_issues:
-            log_agent_event(f"logic-review: clean — {summary}")
+            status = "inconclusive" if source_truncated else "clean"
+            log_agent_event(f"logic-review: {status} — {summary}")
             return {
                 "has_issues": False,
                 "summary": summary,
                 "findings": [],
                 "structured_findings": [],
                 "failures": failures,
-                "inconclusive": False,
+                "inconclusive": source_truncated,
                 "source_truncated": source_truncated,
-                "status": "clean",
+                "status": status,
             }
 
         log_agent_event(f"logic-review: {len(findings)} concrete issue(s) — {summary}")
@@ -401,9 +408,9 @@ def assess_logic_review(
             "findings": findings,
             "structured_findings": structured_findings,
             "failures": failures,
-            "inconclusive": False,
+            "inconclusive": source_truncated,
             "source_truncated": source_truncated,
-            "status": "issues",
+            "status": "inconclusive" if source_truncated else "issues",
         }
 
 
@@ -889,6 +896,8 @@ def review_architecture(
             "finding_count": 0,
             "no_issues": True,
             "skipped": True,
+            "source_truncated": False,
+            "source_truncated_note": None,
             "message": (
                 "Architecture review skipped: v1 cross-file context supports a "
                 "single file, not a directory."
@@ -934,7 +943,9 @@ def review_architecture(
         and not inconclusive,
         "claim_unverified": claim_unverified,
         "inconclusive": inconclusive,
-        "message": assessment.get("summary") if not structured_findings else None,
+        "message": assessment.get("summary") if inconclusive or not structured_findings else None,
+        "source_truncated": bool(assessment.get("source_truncated")),
+        "source_truncated_note": assessment.get("source_truncated_note"),
         "context_files": assessment.get("context_files") or [],
         "tool_call_failures": failures,
         **_structured_report_fields(
