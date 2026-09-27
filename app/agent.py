@@ -730,7 +730,6 @@ def review_changed_files(
 ) -> dict[str, Any]:
     """Review whole changed files, then keep findings that fall in diff hunks."""
     files = list(changed_files)
-    seed_memory()
 
     combined: list[dict[str, Any]] = []
     scan_errors: list[str] = []
@@ -745,6 +744,13 @@ def review_changed_files(
     any_truncated = False
 
     for changed in files:
+        if changed.is_binary:
+            any_inconclusive = True
+            static_scan_empty = False
+            review_messages.append(
+                f"{changed.path}: inconclusive — binary file not reviewed."
+            )
+            continue
         report = review_code(
             str(changed.path),
             max_iterations=max_iterations,

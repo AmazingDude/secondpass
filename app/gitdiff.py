@@ -23,6 +23,7 @@ class ChangedFile:
     path: Path
     ranges: list[tuple[int, int]] = field(default_factory=list)
     is_new: bool = False
+    is_binary: bool = False
 
     def covers_line(self, line: int) -> bool:
         if line <= 0:
@@ -98,16 +99,17 @@ def parse_unified_diff(diff_text: str, *, repo_root: Path) -> list[ChangedFile]:
                 files[rel] = current
             continue
 
+        if raw_line == "+++ /dev/null" or raw_line.startswith("deleted file mode "):
+            # Binary deletions have no +++ marker; both forms remove the target.
+            if current is not None:
+                for key, value in list(files.items()):
+                    if value is current:
+                        del files[key]
+                current = None
+            continue
+
         if raw_line.startswith("+++ "):
             target = raw_line[4:].strip()
-            if target == "/dev/null":
-                # File deleted in this diff — drop it from review targets.
-                if current is not None:
-                    for key, value in list(files.items()):
-                        if value is current:
-                            del files[key]
-                    current = None
-                continue
             if target.startswith("b/"):
                 rel = target[2:]
                 path = (repo_root / rel).resolve()
@@ -125,10 +127,8 @@ def parse_unified_diff(diff_text: str, *, repo_root: Path) -> list[ChangedFile]:
             continue
 
         if raw_line.startswith("Binary files ") or raw_line.startswith("GIT binary patch"):
-            # Skip binaries.
-            for key, value in list(files.items()):
-                if value is current:
-                    del files[key]
+            # Retain the target so callers can report the gap in coverage.
+            current.is_binary = True
             current = None
             continue
 
@@ -154,7 +154,9 @@ def parse_unified_diff(diff_text: str, *, repo_root: Path) -> list[ChangedFile]:
 
     result: list[ChangedFile] = []
     for changed in files.values():
-        if not changed.path.exists() or not changed.path.is_file():
+        if not changed.is_binary and (
+            not changed.path.exists() or not changed.path.is_file()
+        ):
             continue
         changed.ranges = _merge_ranges(changed.ranges)
         result.append(changed)
@@ -169,8 +171,10 @@ def collect_diff_selection(start: Path | None = None) -> DiffSelection:
     is still useful during active coding.
     """
     repo_root = _find_repo_root(start)
+    # Keep Unicode names readable by the existing unified-diff parser.
+    diff_args = ["-c", "core.quotePath=false", "diff", "--no-color", "--unified=3"]
 
-    staged = _run_git(["diff", "--staged", "--no-color", "--unified=3"], cwd=repo_root)
+    staged = _run_git([*diff_args, "--staged"], cwd=repo_root)
     if staged.returncode != 0:
         detail = staged.stderr.strip() or staged.stdout.strip()
         raise GitDiffError(f"git diff --staged failed: {detail}")
@@ -179,7 +183,7 @@ def collect_diff_selection(start: Path | None = None) -> DiffSelection:
         files = parse_unified_diff(staged.stdout, repo_root=repo_root)
         return DiffSelection(mode="staged", files=files, repo_root=repo_root)
 
-    unstaged = _run_git(["diff", "--no-color", "--unified=3"], cwd=repo_root)
+    unstaged = _run_git(diff_args, cwd=repo_root)
     if unstaged.returncode != 0:
         detail = unstaged.stderr.strip() or unstaged.stdout.strip()
         raise GitDiffError(f"git diff failed: {detail}")

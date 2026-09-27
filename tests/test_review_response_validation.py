@@ -121,6 +121,136 @@ def test_cli_displays_unreadable_source_as_incomplete(target: Path, monkeypatch,
     assert model_calls == []
 
 
+@pytest.mark.parametrize("filename", ["asset.bin", "asset with spaces.bin", "café.bin"])
+@pytest.mark.parametrize("remove_after_staging", [False, True])
+def test_cli_reports_binary_diff_as_unreviewed(
+    target: Path, monkeypatch, model_calls, filename, remove_after_staging: bool,
+) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    target = target.with_name(filename)
+    target.write_bytes(b"\x00binary content")
+    monkeypatch.chdir(target.parent)
+    subprocess.run(["git", "init", "--quiet"], check=True)
+    subprocess.run(["git", "add", "--", target.name], check=True)
+    if remove_after_staging:
+        target.unlink()
+    scan_calls = []
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: scan_calls.append(paths) or [])
+
+    result = CliRunner().invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "Review incomplete" in result.output
+    assert "binary" in result.output.lower()
+    assert "Clean result" not in result.output
+    assert "No issues found" not in result.output
+    assert scan_calls == []
+    assert model_calls == []
+
+
+@pytest.mark.parametrize("with_finding", [False, True])
+def test_mixed_diff_preserves_text_results_and_binary_coverage(
+    target: Path, monkeypatch, static_match, with_finding: bool,
+) -> None:
+    binary = target.with_name("asset.bin")
+    binary.write_bytes(b"\x00binary content")
+    scanned = []
+
+    def scan(paths):
+        scanned.extend(paths)
+        return static_match if with_finding else []
+
+    monkeypatch.setattr("app.agent.run_static_scan", scan)
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(
+        '{"has_issues": false, "summary": "No issues.", "issues": []}'
+    ))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+
+    report = review_changed_files([
+        ChangedFile(binary, is_binary=True), ChangedFile(target, [(2, 2)])
+    ])
+
+    assert report["no_issues"] is False
+    assert report["inconclusive"] is True
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+    assert report["accepted_count"] == int(with_finding)
+    assert report["tool_call_failures"] == 0
+    assert str(binary) in report["message"]
+    assert "binary file not reviewed" in report["message"]
+    assert scanned == [str(target)]
+
+
+@pytest.mark.parametrize("with_finding", [False, True])
+def test_cli_preserves_text_result_alongside_binary_warning(
+    target: Path, monkeypatch, static_match, with_finding: bool,
+) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    binary = target.with_name("café.bin")
+    binary.write_bytes(b"\x00binary content")
+    monkeypatch.chdir(target.parent)
+    subprocess.run(["git", "init", "--quiet"], check=True)
+    subprocess.run(["git", "add", "--", target.name, binary.name], check=True)
+    scanned = []
+
+    def scan(paths):
+        scanned.extend(paths)
+        return static_match if with_finding else []
+
+    monkeypatch.setattr("app.agent.run_static_scan", scan)
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(
+        '{"has_issues": false, "summary": "No issues.", "issues": []}'
+    ))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, "explanation": "Static rule matched."}'
+    ))
+
+    result = CliRunner().invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert ("test.static-match" in result.output) == with_finding
+    assert "Coverage: inconclusive" in result.output
+    assert "binary" in result.output.lower()
+    assert "logic review inconclusive" not in result.output
+    assert "No issues found" not in result.output
+    assert scanned == [str(target)]
+
+
+@pytest.mark.parametrize("selection", ["empty", "deleted", "deleted_binary"])
+def test_cli_does_not_call_an_empty_review_clean(target: Path, monkeypatch, model_calls, selection) -> None:
+    from typer.testing import CliRunner
+
+    from app import cli
+
+    monkeypatch.chdir(target.parent)
+    subprocess.run(["git", "init", "--quiet"], check=True)
+    if selection != "empty":
+        if selection == "deleted_binary":
+            target.write_bytes(b"\x00binary content")
+        subprocess.run(["git", "add", "--", target.name], check=True)
+        subprocess.run([
+            "git", "-c", "user.name=Test", "-c", "user.email=test@example.invalid",
+            "commit", "--quiet", "--no-gpg-sign", "-m", "Initial fixture",
+        ], check=True)
+        target.unlink()
+        subprocess.run(["git", "add", "--", target.name], check=True)
+
+    result = CliRunner().invoke(cli.app, ["review", "--diff"])
+
+    assert result.exit_code == 0, result.output
+    assert "Nothing reviewed" in result.output
+    assert "Clean result" not in result.output
+    assert "No issues found" not in result.output
+    assert model_calls == []
+
+
 @pytest.mark.parametrize("with_static_finding", [False, True])
 @pytest.mark.parametrize("static_error", [False, True])
 def test_supervisor_keeps_read_failure_and_static_results(
