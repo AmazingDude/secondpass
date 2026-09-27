@@ -186,7 +186,7 @@ def _display_report(report: dict[str, Any]) -> None:
         )
     elif report.get("used_logic_fallback") and report.get("inconclusive"):
         header.append(
-            "\nStatic scan empty — logic review inconclusive",
+            "\nLogic review used — selected scope is incomplete",
             style="yellow",
         )
     elif report.get("used_logic_fallback") and report.get("no_issues"):
@@ -637,11 +637,11 @@ def review(
                 console.print(
                     Panel(
                         Text(
-                            f"No {selection.mode} changes to review.\n"
-                            "Stage files (`git add`) or edit something first.",
+                            f"No reviewable files in the selected {selection.mode} diff.\n"
+                            "No analysis was performed; this is not a clean review.",
                             style="yellow",
                         ),
-                        title="Clean result",
+                        title="Nothing reviewed",
                         border_style="yellow",
                         padding=(1, 2),
                     )
