@@ -291,8 +291,9 @@ def aggregate_worker_reports(
         security_report.get("inconclusive")
         or (architecture_report or {}).get("inconclusive")
     )
-    architecture_claim_unverified = bool(
-        (architecture_report or {}).get("claim_unverified")
+    claim_unverified = bool(
+        security_report.get("claim_unverified")
+        or (architecture_report or {}).get("claim_unverified")
     )
 
     summary = {
@@ -307,9 +308,9 @@ def aggregate_worker_reports(
         "no_issues": overall_accepted == 0
         and overall_needs == 0
         and not inconclusive
-        and not architecture_claim_unverified,
+        and not claim_unverified,
         "inconclusive": inconclusive,
-        "claim_unverified": architecture_claim_unverified,
+        "claim_unverified": claim_unverified,
         "workers_run": workers_run,
         "tool_call_failures": tool_failures,
         "gate_threshold": security_report.get("gate_threshold")

@@ -212,6 +212,11 @@ def _display_report(report: dict[str, Any]) -> None:
             f"\nCoverage: inconclusive — {report.get('message') or 'logic review incomplete'}",
             style="yellow",
         )
+    if report.get("claim_unverified"):
+        header.append(
+            "\nEvidence bar not met — Security claims did not survive category filtering.",
+            style="yellow",
+        )
     if report.get("source_truncated"):
         note = report.get("source_truncated_note") or (
             "Logic review input was truncated."
@@ -226,6 +231,12 @@ def _display_report(report: dict[str, Any]) -> None:
     needs_review = report.get("needs_review") or []
     if not accepted and not needs_review:
         console.print()
+        if report.get("inconclusive"):
+            title, style = "Review incomplete", "yellow"
+        elif report.get("claim_unverified"):
+            title, style = "Evidence bar not met", "yellow"
+        else:
+            title, style = "No issues found", "green"
         if report.get("diff_mode"):
             filtered_out = int(report.get("filtered_out_findings") or 0)
             detail = str(report.get("message") or "").strip()
@@ -237,8 +248,6 @@ def _display_report(report: dict[str, Any]) -> None:
                 )
             if filtered_out and "outside" not in detail.lower():
                 detail += f"\n({filtered_out} finding(s) were outside the changed line ranges.)"
-            title = "Review incomplete" if report.get("inconclusive") else "No issues found"
-            style = "yellow" if report.get("inconclusive") else "green"
             console.print(
                 Panel(
                     Text(detail, style=style),
@@ -260,8 +269,6 @@ def _display_report(report: dict[str, Any]) -> None:
                         "Semgrep reported no issues and there was no source "
                         "content for a logic fallback."
                     )
-            title = "Review incomplete" if report.get("inconclusive") else "No issues found"
-            style = "yellow" if report.get("inconclusive") else "green"
             console.print(
                 Panel(
                     Text(detail, style=style),

@@ -264,7 +264,8 @@ def assess_logic_review(
         "failures": int,
         "inconclusive": bool,
         "source_truncated": bool,
-        "status": "clean" | "issues" | "inconclusive",
+        "status": "clean" | "issues" | "unverified" | "inconclusive",
+        "claim_unverified": bool,
       }
     """
     source, source_truncated = _read_source_for_logic(path)
@@ -374,21 +375,30 @@ def assess_logic_review(
                     )
                 )
 
-        # Guard: model claimed issues but gave nothing specific → clean.
-        if has_issues and not findings:
+        claim_unverified = has_issues and not findings
+        if claim_unverified:
             has_issues = False
+            summary = (
+                "unverified — Security claimed issues, but none remained after "
+                "category filtering. This is not a clean review."
+            )
             log_agent_event(
-                "logic-review claimed issues but produced none specific; treating as clean"
+                "logic-review claimed issues but all were filtered; claim unverified"
             )
 
         if source_truncated:
             summary = (
                 f"inconclusive — logic review saw only the first {_MAX_LOGIC_SOURCE_CHARS} "
                 "characters of the target source."
+                + (f" {summary}" if claim_unverified else "")
             )
 
         if not has_issues:
-            status = "inconclusive" if source_truncated else "clean"
+            status = (
+                "inconclusive" if source_truncated
+                else "unverified" if claim_unverified
+                else "clean"
+            )
             log_agent_event(f"logic-review: {status} — {summary}")
             return {
                 "has_issues": False,
@@ -397,6 +407,7 @@ def assess_logic_review(
                 "structured_findings": [],
                 "failures": failures,
                 "inconclusive": source_truncated,
+                "claim_unverified": claim_unverified,
                 "source_truncated": source_truncated,
                 "status": status,
             }
@@ -429,6 +440,7 @@ def build_security_review_output(
     *,
     timestamp: datetime | None = None,
     coverage_status: Literal["ok", "inconclusive"] | None = None,
+    claim_unverified: bool = False,
 ) -> tuple[ReviewResult, GateResult, list[dict[str, Any]], list[dict[str, Any]]]:
     """Attach structured findings and gate the worker-enriched review items."""
     if len(reviewed) != len(structured_findings):
@@ -454,6 +466,7 @@ def build_security_review_output(
         timestamp=timestamp or datetime.now(timezone.utc),
         worker_name="security",
         coverage_status=coverage_status,
+        claim_status="unverified" if claim_unverified else None,
     )
     try:
         from app.audit import STAGE_SCHEMA_VALIDATION, log_audit_stage
@@ -513,12 +526,14 @@ def _empty_report(
     source_truncated: bool = False,
     used_logic_review: bool = False,
     logic_review_status: str | None = None,
+    claim_unverified: bool = False,
 ) -> dict[str, Any]:
     review_result, gate_result, accepted, needs_review = build_security_review_output(
         target,
         [],
         [],
         coverage_status="inconclusive" if inconclusive else "ok",
+        claim_unverified=claim_unverified,
     )
     truncated_note = (
         f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
@@ -534,7 +549,8 @@ def _empty_report(
         "static_scan_error": scan_error,
         "used_logic_fallback": used_logic_fallback,
         "used_logic_review": used_logic_review or used_logic_fallback,
-        "no_issues": not inconclusive,
+        "no_issues": not inconclusive and not claim_unverified,
+        "claim_unverified": claim_unverified,
         "inconclusive": inconclusive,
         "logic_review_status": logic_review_status,
         "source_truncated": source_truncated,
@@ -585,6 +601,7 @@ def review_code(
     logic_failures = 0
     logic_summary: str | None = None
     logic_inconclusive = False
+    claim_unverified = False
     source_truncated = False
     logic_review_status: str | None = None
     logic_findings: list[ScannerFinding] = []
@@ -612,6 +629,7 @@ def review_code(
         logic_failures = int(assessment.get("failures") or 0)
         logic_summary = str(assessment.get("summary") or "")
         logic_inconclusive = bool(assessment.get("inconclusive"))
+        claim_unverified = bool(assessment.get("claim_unverified"))
         source_truncated = bool(assessment.get("source_truncated"))
         logic_review_status = str(assessment.get("status") or "") or None
         if assessment.get("has_issues"):
@@ -624,7 +642,7 @@ def review_code(
     incomplete_message = logic_summary or "inconclusive — logic review could not complete"
     if scan_error is not None:
         incomplete_message = "inconclusive — static scan could not complete."
-        if logic_inconclusive and logic_summary:
+        if (logic_inconclusive or claim_unverified) and logic_summary:
             incomplete_message += f" {logic_summary}"
 
     if not findings:
@@ -640,6 +658,7 @@ def review_code(
             inconclusive=inconclusive,
             source_truncated=source_truncated,
             logic_review_status=logic_review_status,
+            claim_unverified=claim_unverified,
         )
 
     if findings:
@@ -654,6 +673,7 @@ def review_code(
         reviewed,
         structured_findings,
         coverage_status="inconclusive" if inconclusive else "ok",
+        claim_unverified=claim_unverified,
     )
     truncated_note = (
         f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
@@ -663,7 +683,7 @@ def review_code(
     message: str | None
     if inconclusive:
         message = incomplete_message
-    elif used_logic_review and logic_summary and logic_findings:
+    elif used_logic_review and logic_summary and (logic_findings or claim_unverified):
         message = logic_summary
     elif not reviewed:
         message = "No security issues found."
@@ -679,7 +699,8 @@ def review_code(
         "static_scan_error": scan_error,
         "used_logic_fallback": used_logic_fallback,
         "used_logic_review": used_logic_review,
-        "no_issues": len(reviewed) == 0 and not inconclusive,
+        "no_issues": len(reviewed) == 0 and not inconclusive and not claim_unverified,
+        "claim_unverified": claim_unverified,
         "inconclusive": inconclusive,
         "logic_review_status": logic_review_status
         or ("issues" if logic_findings else ("clean" if used_logic_review else None)),
@@ -714,9 +735,10 @@ def review_changed_files(
     used_logic_review = False
     static_scan_empty = True
     filtered_out = 0
-    clean_messages: list[str] = []
+    review_messages: list[str] = []
     failures = 0
     any_inconclusive = False
+    any_claim_unverified = False
     any_truncated = False
 
     for changed in files:
@@ -726,6 +748,7 @@ def review_changed_files(
             on_stage=on_stage,
         )
         failures += int(report.get("tool_call_failures") or 0)
+        any_claim_unverified = any_claim_unverified or bool(report.get("claim_unverified"))
         if report.get("static_scan_error"):
             scan_errors.append(f"{changed.path}: {report['static_scan_error']}")
         if not report.get("static_scan_empty"):
@@ -736,10 +759,13 @@ def review_changed_files(
             used_logic_review = True
         if report.get("inconclusive"):
             any_inconclusive = True
-            if report.get("message"):
-                clean_messages.append(f"{changed.path}: {report['message']}")
-        elif report.get("no_issues") and report.get("message"):
-            clean_messages.append(f"{changed.path}: {report['message']}")
+        if report.get("inconclusive") or report.get("claim_unverified"):
+            detail = report.get("message") or (
+                "inconclusive — review could not complete"
+                if report.get("inconclusive")
+                else "unverified — Security claims did not survive category filtering"
+            )
+            review_messages.append(f"{changed.path}: {detail}")
         if report.get("source_truncated"):
             any_truncated = True
 
@@ -763,21 +789,13 @@ def review_changed_files(
         combined,
         combined_structured,
         coverage_status="inconclusive" if any_inconclusive else "ok",
+        claim_unverified=any_claim_unverified,
     )
 
     _emit_stage(on_stage, "building_report")
-    no_issues = len(combined) == 0 and not any_inconclusive
-    message = None
-    if any_inconclusive and len(combined) == 0:
-        message = next(
-            (
-                text.split(": ", 1)[-1]
-                for text in clean_messages
-                if "inconclusive" in text.lower()
-            ),
-            "inconclusive — logic review could not complete",
-        )
-    elif len(combined) == 0:
+    no_issues = len(combined) == 0 and not any_inconclusive and not any_claim_unverified
+    message = "\n".join(review_messages) or None
+    if no_issues:
         if filtered_out:
             message = (
                 "No findings on the changed lines "
@@ -797,7 +815,12 @@ def review_changed_files(
         "used_logic_review": used_logic_review,
         "no_issues": no_issues,
         "inconclusive": any_inconclusive,
-        "logic_review_status": "inconclusive" if any_inconclusive else None,
+        "claim_unverified": any_claim_unverified,
+        "logic_review_status": (
+            "inconclusive" if any_inconclusive
+            else "unverified" if any_claim_unverified
+            else None
+        ),
         "source_truncated": any_truncated,
         "source_truncated_note": (
             f"Logic review saw first {_MAX_LOGIC_SOURCE_CHARS} characters only."
