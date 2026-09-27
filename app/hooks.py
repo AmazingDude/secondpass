@@ -20,7 +20,6 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 _ROOT = Path(__file__).resolve().parent.parent
 _DEFAULT_LOG_PATH = _ROOT / "tool_calls.log"
-_MAX_ARG_CHARS = 400
 
 # Live stderr only (file logs keep full ISO timestamps / plain text).
 _stderr_console = Console(
@@ -182,23 +181,19 @@ def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_
     )
 
 
-def _truncate(value: str, limit: int = _MAX_ARG_CHARS) -> str:
+def _truncate(value: str, limit: int) -> str:
     if len(value) <= limit:
         return value
     return value[: limit - 3] + "..."
 
 
 def _format_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
-    payload: dict[str, Any] = {}
-    if args:
-        payload["args"] = list(args)
-    if kwargs:
-        payload["kwargs"] = kwargs
-    try:
-        rendered = json.dumps(payload, default=str, ensure_ascii=False)
-    except TypeError:
-        rendered = repr(payload)
-    return _truncate(rendered)
+    # Omit values and keyword names before any sink; truncation is not redaction.
+    return json.dumps({
+        "positional_count": len(args),
+        "keyword_count": len(kwargs),
+        "storage": "metadata_only",
+    })
 
 
 def log_tool_call(
@@ -206,7 +201,10 @@ def log_tool_call(
     *,
     log_file: str | Path | None = _DEFAULT_LOG_PATH,
 ) -> F | Callable[[F], F]:
-    """Wrap a tool function and log timestamp, agent, name, args, and duration."""
+    """Log tool identity, status, duration and argument counts, not argument content.
+
+    Free-form agent events and optional file labels have separate log behavior.
+    """
 
     def decorator(inner: F) -> F:
         @functools.wraps(inner)
