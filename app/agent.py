@@ -230,19 +230,13 @@ def is_architecture_category_bleed(
     return any(marker in text for marker in _ARCHITECTURE_BLEED_MARKERS)
 
 
-def _source_is_reviewable(path: str) -> bool:
-    try:
-        text = Path(path).read_text(encoding="utf-8").strip()
-    except (OSError, UnicodeError):
-        return False
-    return bool(text)
-
-
 def _read_source_for_logic(path: str) -> tuple[str, bool]:
     """Return (source_for_prompt, truncated). Truncation is silent in the text
     marker but callers must expose the boolean on the report.
     """
     source = Path(path).read_text(encoding="utf-8")
+    if not source.strip():
+        return "", False
     if len(source) > _MAX_LOGIC_SOURCE_CHARS:
         return source[:_MAX_LOGIC_SOURCE_CHARS] + "\n... [truncated]", True
     return source, False
@@ -264,11 +258,29 @@ def assess_logic_review(
         "failures": int,
         "inconclusive": bool,
         "source_truncated": bool,
-        "status": "clean" | "issues" | "unverified" | "inconclusive",
+        "status": "clean" | "issues" | "unverified" | "inconclusive" | None,
         "claim_unverified": bool,
+        "used_logic_review": False when no model request was made (otherwise omitted),
       }
     """
-    source, source_truncated = _read_source_for_logic(path)
+    source_error = None
+    try:
+        source, source_truncated = _read_source_for_logic(path)
+    except (OSError, UnicodeError):
+        source, source_truncated = "", False
+        source_error = "inconclusive — Security could not read target source as UTF-8."
+    if source_error or not source.strip():
+        return {
+            "has_issues": False,
+            "summary": source_error or "No source content to review.",
+            "findings": [],
+            "structured_findings": [],
+            "failures": 0,
+            "inconclusive": source_error is not None,
+            "source_truncated": False,
+            "status": "inconclusive" if source_error else None,
+            "used_logic_review": False,
+        }
     note = scan_note or "Semgrep reported no issues for this path."
     failures = 0
 
@@ -596,45 +608,36 @@ def review_code(
     scan_empty = not scan_findings
     structured_from_scan = [map_semgrep_finding(finding) for finding in scan_findings]
 
-    used_logic_fallback = False
-    used_logic_review = False
-    logic_failures = 0
-    logic_summary: str | None = None
-    logic_inconclusive = False
-    claim_unverified = False
-    source_truncated = False
-    logic_review_status: str | None = None
     logic_findings: list[ScannerFinding] = []
     logic_structured: list[StructuredFinding] = []
 
-    if _source_is_reviewable(target):
-        used_logic_review = True
-        # Legacy flag: logic ran because static was empty/unavailable.
-        used_logic_fallback = scan_empty
-        _emit_stage(on_stage, "logic_review")
-        if scan_error is not None:
-            scan_note = (
-                f"Static scan unavailable ({scan_error}). Review the source carefully."
-            )
-        elif scan_findings:
-            scan_note = (
-                f"Semgrep reported {len(scan_findings)} static finding(s). "
-                "Look for ADDITIONAL logic / authorization bugs in this source "
-                "that those rules do not already cover. Do not restate the "
-                "static findings."
-            )
-        else:
-            scan_note = "Semgrep reported no issues for this path."
-        assessment = assess_logic_review(target, scan_note=scan_note)
-        logic_failures = int(assessment.get("failures") or 0)
-        logic_summary = str(assessment.get("summary") or "")
-        logic_inconclusive = bool(assessment.get("inconclusive"))
-        claim_unverified = bool(assessment.get("claim_unverified"))
-        source_truncated = bool(assessment.get("source_truncated"))
-        logic_review_status = str(assessment.get("status") or "") or None
-        if assessment.get("has_issues"):
-            logic_findings = list(assessment.get("findings") or [])
-            logic_structured = list(assessment.get("structured_findings") or [])
+    _emit_stage(on_stage, "logic_review")
+    if scan_error is not None:
+        scan_note = (
+            f"Static scan unavailable ({scan_error}). Review the source carefully."
+        )
+    elif scan_findings:
+        scan_note = (
+            f"Semgrep reported {len(scan_findings)} static finding(s). "
+            "Look for ADDITIONAL logic / authorization bugs in this source "
+            "that those rules do not already cover. Do not restate the "
+            "static findings."
+        )
+    else:
+        scan_note = "Semgrep reported no issues for this path."
+    assessment = assess_logic_review(target, scan_note=scan_note)
+    used_logic_review = bool(assessment.get("used_logic_review", True))
+    # Legacy flag: logic ran because static was empty/unavailable.
+    used_logic_fallback = scan_empty and used_logic_review
+    logic_failures = int(assessment.get("failures") or 0)
+    logic_summary = str(assessment.get("summary") or "")
+    logic_inconclusive = bool(assessment.get("inconclusive"))
+    claim_unverified = bool(assessment.get("claim_unverified"))
+    source_truncated = bool(assessment.get("source_truncated"))
+    logic_review_status = str(assessment.get("status") or "") or None
+    if assessment.get("has_issues"):
+        logic_findings = list(assessment.get("findings") or [])
+        logic_structured = list(assessment.get("structured_findings") or [])
 
     findings = [*scan_findings, *logic_findings]
     structured_findings = [*structured_from_scan, *logic_structured]

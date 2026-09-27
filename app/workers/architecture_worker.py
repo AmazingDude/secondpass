@@ -175,9 +175,8 @@ If has_issues is false, issues MUST be an empty list.
 
 
 def _read_truncated(path: str, *, max_chars: int = _MAX_SOURCE_CHARS) -> tuple[str, bool]:
-    try:
-        source = Path(path).read_text(encoding="utf-8")
-    except (OSError, UnicodeError):
+    source = Path(path).read_text(encoding="utf-8")
+    if not source.strip():
         return "", False
     if len(source) > max_chars:
         return source[:max_chars] + "\n... [truncated]", True
@@ -538,7 +537,12 @@ def run_architecture_worker(
         "source_truncated_note": str | None,
       }
     """
-    target_source, source_truncated = _read_truncated(target_path)
+    source_error = None
+    try:
+        target_source, source_truncated = _read_truncated(target_path)
+    except (OSError, UnicodeError):
+        target_source, source_truncated = "", False
+        source_error = "inconclusive — Architecture could not read target source as UTF-8."
     source_coverage = {
         "source_truncated": source_truncated,
         "source_truncated_note": (
@@ -549,12 +553,12 @@ def run_architecture_worker(
     if not target_source.strip():
         return {
             "has_issues": False,
-            "summary": "No source content to review.",
+            "summary": source_error or "No source content to review.",
             "structured_findings": [],
             "context_files": [],
             "failures": 0,
             "claim_unverified": False,
-            "inconclusive": False,
+            "inconclusive": source_error is not None,
             **source_coverage,
         }
 
