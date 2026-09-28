@@ -248,6 +248,40 @@ def test_hooks_persist_under_job_id_and_not_without(
     assert event_kind(tool_ev.stage) == "tool"
 
 
+@pytest.mark.parametrize("message,expected", [
+    ("supervisor starting review of FAKE-PATH-SECRET", "supervisor starting review"),
+    ("logic-review: clean — FAKE-MODEL-SECRET", "logic-review: clean"),
+    ("logic-review: 2 concrete issue(s) — FAKE-MODEL-SECRET", "logic-review: concrete issue(s)"),
+    ("logic-review: 2 concrete issue(s) — inconclusive — FAKE-MODEL-SECRET", "logic-review: inconclusive with issues"),
+    ("architecture_worker: clean — FAKE-MODEL-SECRET", "architecture_worker: clean"),
+    ("architecture_worker: 2 issue(s) — FAKE-MODEL-SECRET", "architecture_worker: claimed issues"),
+    ("architecture_worker: 2 issue(s) — inconclusive — FAKE-MODEL-SECRET", "architecture_worker: inconclusive with issues"),
+    ("supervisor routing: memory=True web=False (FAKE-MODEL-SECRET)", "supervisor routing: selected workers"),
+    ("supervisor -> memory_worker", "supervisor -> memory_worker"),
+    ("memory_worker -> supervisor (worth_reporting=FAKE-MODEL-SECRET)", "memory_worker -> supervisor"),
+    ("supervisor -> security worker", "supervisor -> security worker"),
+    ("FAKE-UNKNOWN-SECRET", "Agent activity"),
+])
+def test_agent_event_omits_free_form_content_from_all_sinks(
+    db_path: Path, tmp_path: Path, monkeypatch, message: str, expected: str,
+) -> None:
+    from io import StringIO
+    from rich.console import Console
+    from app.hooks import agent_scope, log_agent_event
+
+    output = StringIO()
+    monkeypatch.setattr("app.hooks._stderr_console", Console(file=output, width=200))
+    log_path = tmp_path / "agent.log"
+    with audit_scope("agent-privacy"), agent_scope("supervisor"):
+        log_agent_event(message, log_file=log_path)
+
+    event = get_audit_trail("agent-privacy", db_path=db_path)[0]
+    assert event.detail["message"] == expected
+    for rendered in (output.getvalue(), log_path.read_text(encoding="utf-8"), json.dumps(event.detail)):
+        assert expected in rendered
+        assert "FAKE-" not in rendered
+
+
 @pytest.mark.parametrize("fails", [False, True])
 def test_tool_arguments_are_omitted_from_all_hook_sinks(
     db_path: Path, tmp_path: Path, monkeypatch, fails: bool,

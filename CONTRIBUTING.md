@@ -63,12 +63,13 @@ For the frontend:
 ```sh
 cd web
 npm run lint
+npm test
 npm run build
 ```
 
-The build includes TypeScript checking. There is no frontend test suite yet;
-for UI changes, also check the affected flow in a browser and describe what you
-checked in the PR.
+The build includes TypeScript checking. The frontend tests cover the audit
+pipeline timeline; for other UI changes, also check the affected flow in a
+browser and describe what you checked in the PR.
 
 ## CI and review
 

@@ -107,7 +107,7 @@ function mark(
   next: NodeState,
 ) {
   const prev = states[id];
-  if (prev === "warn" && next === "done") return;
+  if (prev === "warn" && next !== "warn") return;
   if (prev === "done" && next === "active") return;
   states[id] = next;
 }
@@ -311,7 +311,9 @@ export function derivePipelineFromAudit(
         agent.includes("architecture") ||
         message.includes("architecture_worker")
       ) {
-        if (
+        if (message.includes("inconclusive")) {
+          mark(states, "architecture", "warn");
+        } else if (
           message.includes("clean") ||
           message.includes("claimed") ||
           message.includes("filtered")
