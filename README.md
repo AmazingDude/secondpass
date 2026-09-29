@@ -191,7 +191,7 @@ python -m app.mcp_client_smoke path/to/file.py
 
 ```text
 secondpass/
-├── app/                      # CLI, Supervisor, workers, API, LLM, scanner, memory
+├── app/                      # CLI, workers, API, memory, bundled security_lessons.json
 ├── web/                      # Vite + React dashboard
 ├── benchmark/
 │   ├── fixtures/             # planted suite
@@ -199,7 +199,6 @@ secondpass/
 │   ├── ground_truth*.json
 │   └── REPORT.md
 ├── tests/
-├── security_lessons.json
 ├── requirements.txt
 ├── pyproject.toml            # local `pip install -e .` → `secondpass` CLI
 ├── .env.example
