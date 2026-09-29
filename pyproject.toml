@@ -31,3 +31,6 @@ secondpass = "app.cli:run"
 
 [tool.setuptools.packages.find]
 include = ["app*"]
+
+[tool.setuptools.package-data]
+app = ["security_lessons.json"]

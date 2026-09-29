@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 import threading
 import uuid
+from importlib.resources import files
 from pathlib import Path
 from typing import Any
 
@@ -13,7 +14,6 @@ import chromadb
 from app.hooks import log_tool_call
 
 _ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_LESSONS_PATH = _ROOT / "security_lessons.json"
 _DEFAULT_DB_PATH = _ROOT / ".chromadb"
 _COLLECTION_NAME = "security_lessons"
 _MEMORY_INIT_LOCK = threading.RLock()
@@ -63,8 +63,8 @@ def seed_memory(
         if collection.count() > 0:
             return 0
 
-        path = Path(lessons_path) if lessons_path else _DEFAULT_LESSONS_PATH
-        lessons = json.loads(path.read_text(encoding="utf-8"))
+        resource = Path(lessons_path) if lessons_path else files("app").joinpath("security_lessons.json")
+        lessons = json.loads(resource.read_text(encoding="utf-8"))
         if not lessons:
             return 0
 
