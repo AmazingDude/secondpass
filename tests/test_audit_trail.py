@@ -13,6 +13,7 @@ from fastapi.testclient import TestClient
 
 from app.api import app
 from app.audit import (
+    STAGE_CHROMA_PROMOTE,
     STAGE_CHROMA_SAVE_SKIP,
     STAGE_CONFIDENCE_GATE,
     STAGE_PROMPT_IO,
@@ -150,6 +151,230 @@ def test_prompt_audit_keeps_metadata_without_content(db_path: Path) -> None:
         "storage": "metadata_only",
     }
     assert detail["model_out"] == {"chars": 29, "storage": "metadata_only"}
+
+
+def test_schema_failure_audit_omits_free_form_details(db_path: Path) -> None:
+    with audit_scope("schema-privacy"):
+        log_audit_stage(
+            STAGE_SCHEMA_VALIDATION,
+            detail={
+                "ok": False,
+                "finding_count": 0,
+                "error": "FAKE-CREDENTIAL-in-exception",
+                "finding_type": "FAKE-CREDENTIAL-in-model-label",
+                "new_debug_field": "FAKE-CREDENTIAL-in-future-field",
+            },
+            db_path=db_path,
+        )
+
+    event = get_audit_trail("schema-privacy", db_path=db_path)[0]
+    assert event.detail == {"ok": False, "finding_count": 0}
+    assert "FAKE-CREDENTIAL" not in json.dumps(event.detail)
+
+
+def test_verified_outcome_audit_keeps_decision_metadata_not_reason(db_path: Path) -> None:
+    with audit_scope("outcome-privacy"):
+        log_audit_stage(
+            STAGE_VERIFIED_OUTCOME,
+            detail={
+                "outcome_id": 9,
+                "review_id": 4,
+                "finding_index": 2,
+                "accepted": True,
+                "reason": "FAKE-CREDENTIAL-in-human-reason",
+                "finding_type": "FAKE-CREDENTIAL-in-finding-label",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("outcome-privacy", db_path=db_path)[0].detail
+    assert detail == {"outcome_id": 9, "review_id": 4, "finding_index": 2, "accepted": True}
+
+
+def test_chroma_promotion_audit_keeps_status_not_exception(db_path: Path) -> None:
+    with audit_scope("promotion-privacy"):
+        log_audit_stage(
+            STAGE_CHROMA_PROMOTE,
+            detail={
+                "outcome_id": 9,
+                "review_id": 4,
+                "finding_index": 2,
+                "status": "error",
+                "error": "FAKE-CREDENTIAL-in-exception",
+                "reason": "FAKE-CREDENTIAL-in-provider-reason",
+                "finding_type": "FAKE-CREDENTIAL-in-model-label",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("promotion-privacy", db_path=db_path)[0].detail
+    assert detail == {"outcome_id": 9, "review_id": 4, "finding_index": 2, "status": "error"}
+
+
+def test_review_start_audit_keeps_directory_progress_path_only(db_path: Path) -> None:
+    with audit_scope("directory-progress"):
+        log_audit_stage(
+            STAGE_REVIEW_START,
+            detail={
+                "path": "C:/workspace/src/notes.py",
+                "run_architecture": True,
+                "debug": "FAKE-CREDENTIAL-in-future-field",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("directory-progress", db_path=db_path)[0].detail
+    assert detail == {"path": "C:/workspace/src/notes.py", "run_architecture": True}
+
+
+def test_review_complete_audit_keeps_progress_metadata_only(db_path: Path) -> None:
+    with audit_scope("directory-complete"):
+        log_audit_stage(
+            STAGE_REVIEW_COMPLETE,
+            detail={
+                "path": "C:/workspace/src/notes.py",
+                "accepted_count": 1,
+                "needs_review_count": 2,
+                "workers_run": ["security", "architecture"],
+                "persisted_review_ids": {"security": 7, "architecture": 8},
+                "debug": "FAKE-CREDENTIAL-in-future-field",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("directory-complete", db_path=db_path)[0].detail
+    assert detail == {
+        "path": "C:/workspace/src/notes.py",
+        "accepted_count": 1,
+        "needs_review_count": 2,
+        "workers_run": ["security", "architecture"],
+        "persisted_review_ids": {"security": 7, "architecture": 8},
+    }
+
+
+def test_gate_audit_keeps_counts_not_future_free_form_detail(db_path: Path) -> None:
+    with audit_scope("gate-privacy"):
+        log_audit_stage(
+            STAGE_CONFIDENCE_GATE,
+            detail={
+                "threshold": 80,
+                "accepted_count": 1,
+                "needs_review_count": 2,
+                "finding_count": 3,
+                "debug": "FAKE-CREDENTIAL-in-future-field",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("gate-privacy", db_path=db_path)[0].detail
+    assert detail == {
+        "threshold": 80,
+        "accepted_count": 1,
+        "needs_review_count": 2,
+        "finding_count": 3,
+    }
+
+
+def test_review_persisted_audit_omits_redundant_file_path(db_path: Path) -> None:
+    with audit_scope("persisted-privacy"):
+        log_audit_stage(
+            STAGE_REVIEW_PERSISTED,
+            detail={
+                "review_id": 4,
+                "accepted_count": 1,
+                "needs_review_count": 2,
+                "file_path": "FAKE-CREDENTIAL-in-private-path",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("persisted-privacy", db_path=db_path)[0].detail
+    assert detail == {"review_id": 4, "accepted_count": 1, "needs_review_count": 2}
+
+
+def test_memory_skip_audit_does_not_repeat_free_form_reason(db_path: Path) -> None:
+    with audit_scope("memory-skip-privacy"):
+        log_audit_stage(
+            STAGE_CHROMA_SAVE_SKIP,
+            detail={"reason": "FAKE-CREDENTIAL-in-reason", "saved_lesson_id": None},
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("memory-skip-privacy", db_path=db_path)[0].detail
+    assert detail == {}
+
+
+def test_unknown_stage_audit_drops_detail_by_default(db_path: Path) -> None:
+    with audit_scope("future-stage-privacy"):
+        log_audit_stage(
+            "future_stage",
+            detail={"message": "FAKE-CREDENTIAL-in-unknown-stage"},
+            db_path=db_path,
+        )
+
+    event = get_audit_trail("future-stage-privacy", db_path=db_path)[0]
+    assert event.stage == "future_stage"
+    assert event.detail == {}
+
+
+def test_rate_limit_stage_keeps_event_without_exception_type(db_path: Path) -> None:
+    with audit_scope("rate-limit-privacy"):
+        log_audit_stage(
+            "llm_rate_limited",
+            detail={"status": "skipped — rate limited", "error_type": "FAKE-CREDENTIAL"},
+            db_path=db_path,
+        )
+
+    event = get_audit_trail("rate-limit-privacy", db_path=db_path)[0]
+    assert event.stage == "llm_rate_limited"
+    assert event.detail == {}
+
+
+def test_stage_metadata_rejects_type_spoofing(db_path: Path) -> None:
+    with audit_scope("typed-metadata"):
+        log_audit_stage(
+            STAGE_CONFIDENCE_GATE,
+            detail={"accepted_count": True, "needs_review_count": "FAKE-CREDENTIAL"},
+            db_path=db_path,
+        )
+        log_audit_stage(
+            STAGE_CHROMA_PROMOTE,
+            detail={"status": "FAKE-CREDENTIAL"},
+            db_path=db_path,
+        )
+
+    events = get_audit_trail("typed-metadata", db_path=db_path)
+    assert events[0].detail == {}
+    assert events[1].detail == {"status": "unknown"}
+
+
+def test_prompt_stage_rejects_content_hidden_in_summary_fields(db_path: Path) -> None:
+    with audit_scope("prompt-stage-privacy"):
+        log_audit_stage(
+            STAGE_PROMPT_IO,
+            detail={
+                "prompt": {
+                    "message_count": 1,
+                    "total_chars": 3,
+                    "messages": [{"role": "user", "chars": 3, "content": "FAKE-CREDENTIAL"}],
+                    "storage": "metadata_only",
+                },
+                "model_out": {"chars": 3, "preview": "FAKE-CREDENTIAL"},
+                "debug": "FAKE-CREDENTIAL",
+            },
+            db_path=db_path,
+        )
+
+    detail = get_audit_trail("prompt-stage-privacy", db_path=db_path)[0].detail
+    assert detail == {
+        "prompt": {
+            "message_count": 1,
+            "total_chars": 3,
+            "messages": [{"role": "user", "chars": 3}],
+            "storage": "metadata_only",
+        },
+        "model_out": {"chars": 3, "storage": "metadata_only"},
+    }
 
 
 @pytest.mark.parametrize("role", ["FAKE-ROLE-SECRET", {"secret": "FAKE-ROLE-SECRET"}, None])
