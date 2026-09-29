@@ -26,8 +26,6 @@ def test_wheel_exposes_default_lessons_outside_checkout(tmp_path: Path) -> None:
         ],
         cwd=tmp_path,
         check=True,
-        capture_output=True,
-        text=True,
     )
     wheel = next(wheel_dir.glob("secondpass-*.whl"))
     install_dir = tmp_path / "installed"
@@ -45,8 +43,6 @@ def test_wheel_exposes_default_lessons_outside_checkout(tmp_path: Path) -> None:
         ],
         cwd=tmp_path,
         check=True,
-        capture_output=True,
-        text=True,
     )
     script = """
 import json
