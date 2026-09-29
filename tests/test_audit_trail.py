@@ -241,9 +241,77 @@ def test_hooks_persist_under_job_id_and_not_without(
     assert agent_ev.detail["agent"] == "supervisor"
     assert tool_ev.detail["tool"] == "search_memory"
     assert tool_ev.detail["ok"] is True
-    assert "ownership" in str(tool_ev.detail["args"])
+    assert json.loads(tool_ev.detail["args"]) == {
+        "positional_count": 1, "keyword_count": 0, "storage": "metadata_only",
+    }
     assert event_kind(agent_ev.stage) == "agent_event"
     assert event_kind(tool_ev.stage) == "tool"
+
+
+@pytest.mark.parametrize("fails", [False, True])
+def test_tool_arguments_are_omitted_from_all_hook_sinks(
+    db_path: Path, tmp_path: Path, monkeypatch, fails: bool,
+) -> None:
+    from io import StringIO
+    from rich.console import Console
+    from app.hooks import agent_scope, log_tool_call
+
+    output = StringIO()
+    monkeypatch.setattr("app.hooks._stderr_console", Console(file=output, width=200))
+    log_path = tmp_path / "tools.log"
+    canary = "FAKE-TOOL-SECRET"
+    received = []
+    error = ValueError(canary)
+
+    @log_tool_call(log_file=log_path)
+    def example_tool(*args, **kwargs):
+        received.append((args, kwargs))
+        if fails:
+            raise error
+        return "result"
+
+    with audit_scope("tool-privacy"), agent_scope("memory_worker"):
+        if fails:
+            with pytest.raises(ValueError) as caught:
+                example_tool({"secret": canary}, **{canary: canary})
+            assert caught.value is error
+        else:
+            assert example_tool({"secret": canary}, **{canary: canary}) == "result"
+    assert received == [(({"secret": canary},), {canary: canary})]
+    events = get_audit_trail("tool-privacy", db_path=db_path)
+    assert len(events) == 1
+    detail = events[0].detail
+    for rendered in (output.getvalue(), log_path.read_text(encoding="utf-8"), json.dumps(detail)):
+        assert canary not in rendered
+        assert "example_tool" in rendered
+        assert "duration_ms" in rendered
+    assert detail["ok"] is not fails
+    assert detail["status"] == ("error=ValueError" if fails else "ok")
+    assert json.loads(detail["args"]) == {
+        "positional_count": 1, "keyword_count": 1, "storage": "metadata_only",
+    }
+
+
+def test_tool_logging_does_not_serialize_arguments(db_path: Path) -> None:
+    from app.hooks import log_tool_call, live_stderr_scope
+
+    class PrivateArgument:
+        def __str__(self):
+            raise AssertionError("Logging must not inspect private argument content")
+
+        __repr__ = __str__
+
+    argument = PrivateArgument()
+
+    @log_tool_call(log_file=None)
+    def identity(value):
+        return value
+
+    with audit_scope("opaque-argument"), live_stderr_scope(enabled=False):
+        assert identity(argument) is argument
+    event = get_audit_trail("opaque-argument", db_path=db_path)[0]
+    assert event.detail["ok"] is True
+    assert json.loads(event.detail["args"])["positional_count"] == 1
 
 
 def test_api_audit_returns_hook_events(
