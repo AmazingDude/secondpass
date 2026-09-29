@@ -4,10 +4,10 @@ Includes pipeline stages (schema_validation, confidence_gate, …) and, when a
 job_id is in audit_scope, CLI-equivalent hook rows from hooks.py
 (agent_event / tool_call) so one poll returns a mixed chronological feed.
 
-Storage choice for prompt I/O: redacted summaries only — per-message role,
-character lengths, and a short preview. Full prompts can exceed practical
-SQLite/row size and are noisy for "why trust this" inspection; lengths +
-preview are enough to reconstruct which stage ran and roughly what was sent.
+Prompt I/O summaries retain roles and character counts, never text previews.
+Truncation does not protect credentials or private source content. Other audit
+stages and hook logs have separate content policies; this is not a general
+redaction layer and does not rewrite historical records.
 """
 
 from __future__ import annotations
@@ -44,8 +44,6 @@ def event_kind(stage: str) -> str:
     if stage == STAGE_TOOL_CALL:
         return "tool"
     return "stage"
-
-_PREVIEW_CHARS = 240
 
 _current_job_id: ContextVar[str | None] = ContextVar(
     "secondpass_audit_job_id", default=None
@@ -84,10 +82,15 @@ def audit_worker_scope(worker_name: str) -> Iterator[None]:
 
 
 def summarize_messages(messages: list[dict[str, Any]] | None) -> dict[str, Any]:
-    """Redacted prompt summary: roles, lengths, short previews — not full text."""
+    """Prompt metadata only: roles and lengths, with no content retained."""
     items: list[dict[str, Any]] = []
     total_chars = 0
     for message in messages or []:
+        role = message.get("role")
+        if not isinstance(role, str) or role not in (
+            "system", "developer", "user", "assistant", "tool", "function"
+        ):
+            role = "unknown"
         content = message.get("content")
         if content is None:
             text = ""
@@ -98,26 +101,24 @@ def summarize_messages(messages: list[dict[str, Any]] | None) -> dict[str, Any]:
         total_chars += len(text)
         items.append(
             {
-                "role": message.get("role"),
+                "role": role,
                 "chars": len(text),
-                "preview": text[:_PREVIEW_CHARS]
-                + ("..." if len(text) > _PREVIEW_CHARS else ""),
             }
         )
     return {
         "message_count": len(items),
         "total_chars": total_chars,
         "messages": items,
-        "storage": "redacted_summary",
+        "storage": "metadata_only",
     }
 
 
 def summarize_model_out(content: str | None) -> dict[str, Any]:
+    """Response metadata only; even short content can contain a secret."""
     text = content or ""
     return {
         "chars": len(text),
-        "preview": text[:_PREVIEW_CHARS] + ("..." if len(text) > _PREVIEW_CHARS else ""),
-        "storage": "redacted_summary",
+        "storage": "metadata_only",
     }
 
 

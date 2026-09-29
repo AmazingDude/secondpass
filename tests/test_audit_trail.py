@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import time
+import json
 from pathlib import Path
 from types import SimpleNamespace
 from typing import Any
@@ -21,8 +22,10 @@ from app.audit import (
     STAGE_SCHEMA_VALIDATION,
     STAGE_VERIFIED_OUTCOME,
     get_audit_trail,
+    audit_scope,
     log_audit_stage,
     summarize_messages,
+    summarize_model_out,
 )
 from app.jobs import JobStore
 from app.persistence import list_audit_events, save_audit_event
@@ -128,13 +131,56 @@ def db_path(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     return path
 
 
-def test_summarize_messages_is_redacted_not_full_dump() -> None:
-    huge = "X" * 5000
-    summary = summarize_messages([{"role": "user", "content": huge}])
-    assert summary["storage"] == "redacted_summary"
-    assert summary["total_chars"] == 5000
-    assert len(summary["messages"][0]["preview"]) < 500
-    assert huge not in summary["messages"][0]["preview"]
+def test_prompt_audit_keeps_metadata_without_content(db_path: Path) -> None:
+    canary = "FAKE-CREDENTIAL-DO-NOT-RETAIN"
+    with audit_scope("prompt-privacy"):
+        log_audit_stage(STAGE_PROMPT_IO, detail={
+            "prompt": summarize_messages([{"role": "user", "content": canary}]),
+            "model_out": summarize_model_out(canary),
+        }, db_path=db_path)
+
+    events = get_audit_trail("prompt-privacy", db_path=db_path)
+    assert len(events) == 1
+    detail = events[0].detail
+    assert canary not in json.dumps(detail)
+    assert detail["prompt"] == {
+        "message_count": 1,
+        "total_chars": 29,
+        "messages": [{"role": "user", "chars": 29}],
+        "storage": "metadata_only",
+    }
+    assert detail["model_out"] == {"chars": 29, "storage": "metadata_only"}
+
+
+@pytest.mark.parametrize("role", ["FAKE-ROLE-SECRET", {"secret": "FAKE-ROLE-SECRET"}, None])
+def test_prompt_audit_does_not_retain_arbitrary_role_data(db_path: Path, role: Any) -> None:
+    with audit_scope("invalid-role"):
+        log_audit_stage(STAGE_PROMPT_IO, detail={
+            "prompt": summarize_messages([{"role": role, "content": None}]),
+        }, db_path=db_path)
+
+    detail = get_audit_trail("invalid-role", db_path=db_path)[0].detail
+    assert detail["prompt"]["messages"] == [{"role": "unknown", "chars": 0}]
+
+
+@pytest.mark.parametrize("role", ["system", "developer", "user", "assistant", "tool", "function"])
+def test_prompt_audit_preserves_roles_and_structured_content_counts(db_path: Path, role: str) -> None:
+    messages = [{"role": role, "content": [{"text": "FAKE"}], "name": "FAKE-NAME"}]
+    with audit_scope("structured-prompt"):
+        log_audit_stage(STAGE_PROMPT_IO, detail={
+            "prompt": summarize_messages(messages),
+            "model_out": summarize_model_out(None),
+        }, db_path=db_path)
+
+    detail = get_audit_trail("structured-prompt", db_path=db_path)[0].detail
+    assert detail == {
+        "prompt": {
+            "message_count": 1, "total_chars": 18,
+            "messages": [{"role": role, "chars": 18}], "storage": "metadata_only",
+        },
+        "model_out": {"chars": 0, "storage": "metadata_only"},
+    }
+    assert messages == [{"role": role, "content": [{"text": "FAKE"}], "name": "FAKE-NAME"}]
 
 
 def test_save_and_list_audit_events_ordered(db_path: Path) -> None:
