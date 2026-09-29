@@ -107,7 +107,7 @@ function mark(
   next: NodeState,
 ) {
   const prev = states[id];
-  if (prev === "warn" && next === "done") return;
+  if (prev === "warn" && next !== "warn") return;
   if (prev === "done" && next === "active") return;
   states[id] = next;
 }
@@ -239,7 +239,7 @@ export function derivePipelineFromAudit(
       ) {
         finishActive(states, "logic");
         mark(states, "security", "active");
-        if (message.includes("inconclusive") || message.includes("rate")) {
+        if (message.includes("inconclusive") || message.includes("unverified") || message.includes("rate")) {
           mark(states, "logic", "warn");
           mark(states, "security", "warn");
           setInfo(info, "logic", { message: String(detail.message || "") });
@@ -311,7 +311,9 @@ export function derivePipelineFromAudit(
         agent.includes("architecture") ||
         message.includes("architecture_worker")
       ) {
-        if (
+        if (message.includes("inconclusive") || message.includes("claim_unverified")) {
+          mark(states, "architecture", "warn");
+        } else if (
           message.includes("clean") ||
           message.includes("claimed") ||
           message.includes("filtered")

@@ -5,6 +5,7 @@ from __future__ import annotations
 import functools
 import inspect
 import json
+import re
 import sys
 import time
 from contextlib import contextmanager
@@ -31,6 +32,42 @@ _stderr_console = Console(
 _AGENT_FIELD_WIDTH = 28  # "agent=architecture_worker"
 _TOOL_FIELD_WIDTH = 24  # "tool=run_static_scan"
 _KIND_FIELD_WIDTH = 12  # "agent_event"
+
+_SAFE_AGENT_EVENTS = frozenset({
+    "supervisor -> security worker",
+    "supervisor -> architecture worker",
+    "supervisor -> memory_worker",
+    "supervisor -> web_worker",
+    "supervisor running honest logic-review assessment",
+    "logic-review inconclusive — rate limited",
+    "logic-review inconclusive — invalid model response",
+    "architecture_worker inconclusive — rate limited",
+    "architecture_worker inconclusive — invalid model response",
+    "supervisor received finding; deciding worker routing",
+    "supervisor skip save_finding — verified outcomes require human accept/reject",
+})
+_AGENT_EVENT_PREFIXES = (
+    ("supervisor starting review of ", "supervisor starting review"),
+    ("supervisor path review starting for ", "supervisor path review starting"),
+    ("supervisor routing: ", "supervisor routing: selected workers"),
+    ("supervisor routing failed (", "supervisor routing failed"),
+    ("supervisor scan error: ", "supervisor scan error"),
+    ("memory_worker -> supervisor ", "memory_worker -> supervisor"),
+    ("web_worker -> supervisor ", "web_worker -> supervisor"),
+    ("logic-review assessment failed (", "logic-review inconclusive"),
+    ("logic-review dropped architecture-category bleed ", "logic-review filtered issue"),
+    ("logic-review: clean —", "logic-review: clean"),
+    ("logic-review: inconclusive —", "logic-review: inconclusive"),
+    ("logic-review: unverified —", "logic-review: unverified"),
+    ("architecture_worker reviewing ", "architecture_worker reviewing"),
+    ("architecture_worker failed (", "architecture_worker inconclusive"),
+    ("architecture_worker: clean —", "architecture_worker: clean"),
+    ("architecture_worker: inconclusive —", "architecture_worker: inconclusive"),
+    ("architecture_worker: claim_unverified — inconclusive —", "architecture_worker: inconclusive with unverified claim"),
+    ("architecture_worker: claim_unverified —", "architecture_worker: claim_unverified"),
+    ("architecture_worker claimed issues but none met the evidence bar;", "architecture_worker: claim_unverified"),
+    ("supervisor aggregated report: ", "supervisor aggregated report"),
+)
 
 # Which multi-agent role is currently executing (supervisor / memory_worker / …).
 _current_agent: ContextVar[str] = ContextVar("secondpass_agent", default="system")
@@ -157,12 +194,31 @@ def _persist_hook_event(
 
 
 def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_PATH) -> None:
-    """Log a multi-agent hand-off or decision (not a tool call)."""
+    """Log a fixed progress label, never caller-supplied free-form content."""
     now = datetime.now(timezone.utc)
     timestamp = now.isoformat()
     agent_name = get_current_agent()
-    line = f"{timestamp} | agent_event | {message}"
-    _print_agent_stderr(now, message)
+    if message in _SAFE_AGENT_EVENTS:
+        label = message
+    elif match := re.match(r"^logic-review: \d+ concrete issue\(s\) — (.*)", message):
+        label = (
+            "logic-review: inconclusive with issues"
+            if match.group(1).startswith("inconclusive")
+            else "logic-review: concrete issue(s)"
+        )
+    elif match := re.match(r"^architecture_worker: \d+ issue\(s\) — (.*)", message):
+        label = (
+            "architecture_worker: inconclusive with issues"
+            if match.group(1).startswith("inconclusive")
+            else "architecture_worker: claimed issues"
+        )
+    else:
+        label = next(
+            (safe for prefix, safe in _AGENT_EVENT_PREFIXES if message.startswith(prefix)),
+            "Agent activity",
+        )
+    line = f"{timestamp} | agent_event | {label}"
+    _print_agent_stderr(now, label)
     if log_file is not None:
         path = Path(log_file)
         path.parent.mkdir(parents=True, exist_ok=True)
@@ -176,15 +232,9 @@ def log_agent_event(message: str, *, log_file: str | Path | None = _DEFAULT_LOG_
         detail={
             "kind": "agent_event",
             "agent": agent_name,
-            "message": _truncate(str(message), limit=500),
+            "message": label,
         },
     )
-
-
-def _truncate(value: str, limit: int) -> str:
-    if len(value) <= limit:
-        return value
-    return value[: limit - 3] + "..."
 
 
 def _format_args(args: tuple[Any, ...], kwargs: dict[str, Any]) -> str:
