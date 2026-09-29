@@ -239,7 +239,7 @@ export function derivePipelineFromAudit(
       ) {
         finishActive(states, "logic");
         mark(states, "security", "active");
-        if (message.includes("inconclusive") || message.includes("rate")) {
+        if (message.includes("inconclusive") || message.includes("unverified") || message.includes("rate")) {
           mark(states, "logic", "warn");
           mark(states, "security", "warn");
           setInfo(info, "logic", { message: String(detail.message || "") });
@@ -311,7 +311,7 @@ export function derivePipelineFromAudit(
         agent.includes("architecture") ||
         message.includes("architecture_worker")
       ) {
-        if (message.includes("inconclusive")) {
+        if (message.includes("inconclusive") || message.includes("claim_unverified")) {
           mark(states, "architecture", "warn");
         } else if (
           message.includes("clean") ||

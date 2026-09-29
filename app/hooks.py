@@ -63,6 +63,7 @@ _AGENT_EVENT_PREFIXES = (
     ("architecture_worker failed (", "architecture_worker inconclusive"),
     ("architecture_worker: clean —", "architecture_worker: clean"),
     ("architecture_worker: inconclusive —", "architecture_worker: inconclusive"),
+    ("architecture_worker: claim_unverified — inconclusive —", "architecture_worker: inconclusive with unverified claim"),
     ("architecture_worker: claim_unverified —", "architecture_worker: claim_unverified"),
     ("architecture_worker claimed issues but none met the evidence bar;", "architecture_worker: claim_unverified"),
     ("supervisor aggregated report: ", "supervisor aggregated report"),

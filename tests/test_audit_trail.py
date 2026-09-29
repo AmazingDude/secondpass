@@ -256,6 +256,7 @@ def test_hooks_persist_under_job_id_and_not_without(
     ("architecture_worker: clean — FAKE-MODEL-SECRET", "architecture_worker: clean"),
     ("architecture_worker: 2 issue(s) — FAKE-MODEL-SECRET", "architecture_worker: claimed issues"),
     ("architecture_worker: 2 issue(s) — inconclusive — FAKE-MODEL-SECRET", "architecture_worker: inconclusive with issues"),
+    ("architecture_worker: claim_unverified — inconclusive — FAKE-MODEL-SECRET", "architecture_worker: inconclusive with unverified claim"),
     ("supervisor routing: memory=True web=False (FAKE-MODEL-SECRET)", "supervisor routing: selected workers"),
     ("supervisor -> memory_worker", "supervisor -> memory_worker"),
     ("memory_worker -> supervisor (worth_reporting=FAKE-MODEL-SECRET)", "memory_worker -> supervisor"),
