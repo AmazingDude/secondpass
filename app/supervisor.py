@@ -149,6 +149,7 @@ def supervise_finding(
     *,
     max_iterations: int = 4,
     memory_available: bool = True,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
     """Run supervisor → workers → synthesis for one finding.
 
@@ -159,6 +160,7 @@ def supervise_finding(
 
     If lesson-store initialization failed, ``memory_available=False`` skips
     retrieval and gives synthesis an explicit unavailable-memory result.
+    Explicit ``memory_enabled=False`` skips retrieval by policy, not failure.
     """
     from app.audit import STAGE_CHROMA_SAVE_SKIP, audit_worker_scope, log_audit_stage
 
@@ -168,7 +170,7 @@ def supervise_finding(
         log_agent_event("supervisor received finding; deciding worker routing")
         route, route_failures = _route_workers(finding)
         failures += route_failures
-        if not memory_available:
+        if not memory_enabled or not memory_available:
             route["use_memory"] = False
         log_agent_event(
             "supervisor routing: "
@@ -178,7 +180,15 @@ def supervise_finding(
 
         memory_result: dict[str, Any] | None = None
         web_result: dict[str, Any] | None = None
-        if not memory_available:
+        if not memory_enabled:
+            memory_result = {
+                "disabled": True,
+                "searched": False,
+                "worth_reporting": False,
+                "matches": [],
+                "best_match": None,
+            }
+        elif not memory_available:
             memory_result = {
                 "unavailable": True,
                 "error": "Lesson memory could not initialize.",
@@ -353,6 +363,7 @@ def supervise_review(
     run_architecture: bool = True,
     on_stage: StageCallback | None = None,
     job_id: str | None = None,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
     """Top-level Supervisor: run Security (+ Architecture) and aggregate.
 
@@ -393,6 +404,7 @@ def supervise_review(
                 target,
                 max_iterations=max_iterations,
                 on_stage=on_stage,
+                memory_enabled=memory_enabled,
             )
 
         architecture_report: dict[str, Any] | None = None

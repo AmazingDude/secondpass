@@ -442,10 +442,12 @@ def _review_finding(
     max_iterations: int = MAX_TOOL_ITERATIONS,
     *,
     memory_available: bool = True,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
     """Hand one finding to the supervisor → workers pipeline."""
     return supervise_finding(
-        dict(finding), max_iterations=max_iterations, memory_available=memory_available
+        dict(finding), max_iterations=max_iterations, memory_available=memory_available,
+        memory_enabled=memory_enabled,
     )
 
 
@@ -592,14 +594,20 @@ def review_code(
     max_iterations: int = MAX_TOOL_ITERATIONS,
     *,
     on_stage: StageCallback | None = None,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
-    """Run scan + multi-agent review over a path; return a structured report."""
+    """Run scan + multi-agent review; optionally disable lesson retrieval.
+
+    Disabled memory is not failed coverage. When enabled, startup failure
+    still makes the review inconclusive without discarding detector findings.
+    """
     target = str(Path(path).resolve())
     memory_unavailable = False
-    try:
-        seed_memory()
-    except Exception:  # noqa: BLE001 — lesson-store failure must preserve detector results
-        memory_unavailable = True
+    if memory_enabled:
+        try:
+            seed_memory()
+        except Exception:  # noqa: BLE001 — lesson-store failure must preserve detector results
+            memory_unavailable = True
 
     scan_error: str | None = None
     scan_findings: list[ScannerFinding] = []
@@ -685,6 +693,7 @@ def review_code(
             finding,
             max_iterations=max_iterations,
             memory_available=not memory_unavailable,
+            memory_enabled=memory_enabled,
         )
         for finding in findings
     ]
@@ -746,6 +755,7 @@ def review_changed_files(
     max_iterations: int = MAX_TOOL_ITERATIONS,
     mode: str = "staged",
     on_stage: StageCallback | None = None,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
     """Review whole changed files, then keep findings that fall in diff hunks."""
     files = list(changed_files)
@@ -774,6 +784,7 @@ def review_changed_files(
             str(changed.path),
             max_iterations=max_iterations,
             on_stage=on_stage,
+            memory_enabled=memory_enabled,
         )
         failures += int(report.get("tool_call_failures") or 0)
         any_claim_unverified = any_claim_unverified or bool(report.get("claim_unverified"))
@@ -1013,6 +1024,7 @@ def review_path(
     max_iterations: int = MAX_TOOL_ITERATIONS,
     *,
     on_stage: StageCallback | None = None,
+    memory_enabled: bool = True,
 ) -> dict[str, Any]:
     """Run Security + Architecture under the Supervisor aggregator.
 
@@ -1026,4 +1038,5 @@ def review_path(
         max_iterations=max_iterations,
         run_architecture=True,
         on_stage=on_stage,
+        memory_enabled=memory_enabled,
     )

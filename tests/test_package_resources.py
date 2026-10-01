@@ -275,28 +275,28 @@ assert not (Path(sys.argv[1]) / "tool_calls.log").exists()
     )
 
 
-@pytest.mark.parametrize("finding_count", [0, 1])
-@pytest.mark.parametrize("missing_module", ["chromadb", "onnxruntime"])
-def test_installed_review_survives_missing_memory_dependencies(
-    installed_wheel: Path, tmp_path: Path, finding_count: int, missing_module: str,
-) -> None:
-    script = """
+_INSTALLED_REVIEW_SCRIPT = """
 import importlib.abc
+import importlib.metadata as metadata
 import json
 import socket
+import subprocess
 import sys
 from pathlib import Path
 from types import SimpleNamespace
 
 class MissingChroma(importlib.abc.MetaPathFinder):
+    attempts = 0
     def find_spec(self, fullname, path=None, target=None):
         if fullname.split(".")[0] == "chromadb":
+            self.attempts += 1
             raise ModuleNotFoundError("private-import-error-canary", name=sys.argv[4])
 
 def no_network(*args, **kwargs):
     raise AssertionError("The scripted review must not access the network")
 
-sys.meta_path.insert(0, MissingChroma())
+missing_chroma = MissingChroma()
+sys.meta_path.insert(0, missing_chroma)
 socket.socket.connect = no_network
 socket.socket.connect_ex = no_network
 socket.getaddrinfo = no_network
@@ -309,20 +309,26 @@ assert app.__file__.startswith(sys.argv[1])
 
 # Only the absent Chroma package gets the install diagnostic. A missing
 # transitive dependency must retain its original classification for callers.
-try:
-    seed_memory()
-except MissingMemoryDependencyError as exc:
-    assert sys.argv[4] == "chromadb"
-    assert "python -m pip install chromadb" in str(exc)
-except ModuleNotFoundError as exc:
-    assert sys.argv[4] == "onnxruntime"
-    assert exc.name == "onnxruntime"
-else:
-    raise AssertionError("Missing memory dependency must not initialize")
+mode = sys.argv[5]
+state_dir = Path(sys.argv[2])
+if mode == "supervised":
+    try:
+        seed_memory()
+    except MissingMemoryDependencyError as exc:
+        assert sys.argv[4] == "chromadb"
+        assert "python -m pip install chromadb" in str(exc)
+    except ModuleNotFoundError as exc:
+        assert sys.argv[4] == "onnxruntime"
+        assert exc.name == "onnxruntime"
+    else:
+        raise AssertionError("Missing memory dependency must not initialize")
 
 target = Path("shell.py").resolve()
-target.write_text("import subprocess\\nsubprocess.run(command, shell=True)\\n")
 finding_count = int(sys.argv[3])
+target.write_text(
+    "import subprocess\\nsubprocess.run(command, shell=True)\\n" if finding_count
+    else "def greet():\\n    return 'hello'\\n"
+)
 agent.run_static_scan = lambda paths: [{
     "rule_id": "python.lang.security.audit.subprocess-shell-true",
     "severity": "ERROR", "path": str(target), "line": 2,
@@ -339,6 +345,8 @@ def chat(messages, tools=None, temperature=None):
     elif "Synthesize a final security review" in system:
         result = {"explanation": "Shell execution accepts untrusted input.",
                   "suggested_fix": "Pass an argument list without a shell."}
+    elif "You are ArchitectureWorker" in system:
+        result = {"has_issues": False, "summary": "No architecture issues.", "issues": []}
     else:
         raise AssertionError("Unexpected model request")
     return SimpleNamespace(choices=[SimpleNamespace(
@@ -347,24 +355,56 @@ def chat(messages, tools=None, temperature=None):
 
 agent.chat = chat
 supervisor.chat = chat
-report = supervisor.supervise_review(str(target), run_architecture=False)
-assert report["summary"]["inconclusive"] is True
-assert report["summary"]["no_issues"] is False
-security = report["security"]
-assert security["finding_count"] == finding_count
-if finding_count:
-    assert security["all_findings"][0]["finding"]["rule_id"] == "python.lang.security.audit.subprocess-shell-true"
-    assert security["all_findings"][0]["memory_worker"]["unavailable"] is True
-    assert security["all_findings"][0]["routing"]["use_memory"] is False
+if mode == "supervised":
+    report = supervisor.supervise_review(str(target), run_architecture=False)
+    assert report["summary"]["inconclusive"] is True
+    assert report["summary"]["no_issues"] is False
+    security = report["security"]
+    assert security["finding_count"] == finding_count
+    if finding_count:
+        assert security["all_findings"][0]["finding"]["rule_id"] == "python.lang.security.audit.subprocess-shell-true"
+        assert security["all_findings"][0]["memory_worker"]["unavailable"] is True
+        assert security["all_findings"][0]["routing"]["use_memory"] is False
+    assert "private-import-error-canary" not in json.dumps(report)
+else:
+    from app.workers import architecture_worker
+    architecture_worker.chat = chat
+    if mode == "diff":
+        subprocess.run(["git", "init", "--quiet"], check=True)
+        subprocess.run(["git", "add", "shell.py"], check=True)
+        args = ["--diff"]
+    else:
+        args = [str(target) if mode == "file" else str(target.parent), "--workers", "1"]
+    entry = next(entry for entry in metadata.distribution("secondpass").entry_points
+                 if entry.group == "console_scripts" and entry.name == "secondpass")
+    run = entry.load()
+    sys.argv = ["secondpass", "review", *args, "--no-memory"]
+    try:
+        run()
+    except SystemExit as exc:
+        assert exc.code in (0, None)
+    assert missing_chroma.attempts == 0
+
 reviews = list_reviews()
-assert len(reviews) == 1
-assert reviews[0].review_result.coverage_status == "inconclusive"
-assert "private-import-error-canary" not in json.dumps(report)
-assert not (Path(sys.argv[2]) / "chromadb").exists()
+security_reviews = [review for review in reviews if review.worker_name == "security"]
+if mode != "diff":
+    assert len(security_reviews) == 1
+    assert len(security_reviews[0].review_result.findings) == finding_count
+    expected_coverage = "inconclusive" if mode == "supervised" else "ok"
+    assert security_reviews[0].review_result.coverage_status == expected_coverage
+assert not (state_dir / "chromadb").exists()
 """
+
+
+@pytest.mark.parametrize("finding_count", [0, 1])
+@pytest.mark.parametrize("missing_module", ["chromadb", "onnxruntime"])
+def test_installed_review_survives_missing_memory_dependencies(
+    installed_wheel: Path, tmp_path: Path, finding_count: int, missing_module: str,
+) -> None:
     state_dir = tmp_path / "state"
     result = subprocess.run(
-        [sys.executable, "-c", script, str(installed_wheel), str(state_dir), str(finding_count), missing_module],
+        [sys.executable, "-c", _INSTALLED_REVIEW_SCRIPT, str(installed_wheel),
+         str(state_dir), str(finding_count), missing_module, "supervised"],
         cwd=tmp_path,
         env={**os.environ, "SECONDPASS_DATA_DIR": str(state_dir), "PYTHONDONTWRITEBYTECODE": "1"},
         capture_output=True,
@@ -373,3 +413,25 @@ assert not (Path(sys.argv[2]) / "chromadb").exists()
     )
     assert result.returncode == 0, result.stdout + result.stderr
     assert "private-import-error-canary" not in result.stdout + result.stderr
+
+
+@pytest.mark.parametrize("mode", ["file", "directory", "diff"])
+@pytest.mark.parametrize("finding_count", [0, 1])
+def test_installed_cli_can_disable_lesson_retrieval(
+    installed_wheel: Path, tmp_path: Path, mode: str, finding_count: int,
+) -> None:
+    result = subprocess.run(
+        [sys.executable, "-c", _INSTALLED_REVIEW_SCRIPT, str(installed_wheel),
+         str(tmp_path / "state"), str(finding_count), "chromadb", mode],
+        cwd=tmp_path,
+        env={**os.environ, "SECONDPASS_DATA_DIR": str(tmp_path / "state"),
+             "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "private-import-error-canary" not in result.stdout + result.stderr
+    if mode == "diff":
+        assert f"Findings reviewed: {finding_count}" in result.stdout
+        assert "Coverage: inconclusive" not in result.stdout

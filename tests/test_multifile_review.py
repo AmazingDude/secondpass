@@ -364,7 +364,7 @@ def test_single_file_cli_still_calls_supervise_review_once(
     target.write_text("value = 1\n", encoding="utf-8")
     calls: list[str] = []
 
-    def fake_supervise(path: str, *, on_stage=None) -> dict:
+    def fake_supervise(path: str, *, on_stage=None, memory_enabled=True) -> dict:
         del on_stage
         calls.append(path)
         security = {
@@ -409,7 +409,7 @@ def test_directory_cli_prints_selection_and_skips_init(
     _write(tmp_path, "b_mod.py", "y = 2\n")
     reviewed: list[str] = []
 
-    def fake_supervise(path: str) -> dict:
+    def fake_supervise(path: str, *, memory_enabled=True) -> dict:
         reviewed.append(Path(path).name)
         return {
             "path": path,
@@ -443,7 +443,7 @@ def test_directory_cli_verbose_flag_is_accepted(
 
     _write(tmp_path, "only.py", "x = 1\n")
 
-    def fake_supervise(path: str) -> dict:
+    def fake_supervise(path: str, *, memory_enabled=True) -> dict:
         return {
             "path": path,
             "summary": {"accepted_count": 1, "needs_review_count": 0},
