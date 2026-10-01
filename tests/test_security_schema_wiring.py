@@ -147,7 +147,7 @@ def test_review_code_returns_schema_and_gate_json_offline(
     )
     monkeypatch.setattr(
         "app.agent._review_finding",
-        lambda finding, max_iterations: _reviewed(
+        lambda finding, max_iterations, memory_available=True: _reviewed(
             finding,
             suggested_fix="Use shell=False and pass an argument list.",
         ),

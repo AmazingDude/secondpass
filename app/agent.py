@@ -440,9 +440,13 @@ def assess_logic_review(
 def _review_finding(
     finding: ScannerFinding,
     max_iterations: int = MAX_TOOL_ITERATIONS,
+    *,
+    memory_available: bool = True,
 ) -> dict[str, Any]:
     """Hand one finding to the supervisor → workers pipeline."""
-    return supervise_finding(dict(finding), max_iterations=max_iterations)
+    return supervise_finding(
+        dict(finding), max_iterations=max_iterations, memory_available=memory_available
+    )
 
 
 def build_security_review_output(
@@ -591,7 +595,11 @@ def review_code(
 ) -> dict[str, Any]:
     """Run scan + multi-agent review over a path; return a structured report."""
     target = str(Path(path).resolve())
-    seed_memory()
+    memory_unavailable = False
+    try:
+        seed_memory()
+    except Exception:  # noqa: BLE001 — lesson-store failure must preserve detector results
+        memory_unavailable = True
 
     scan_error: str | None = None
     scan_findings: list[ScannerFinding] = []
@@ -641,12 +649,18 @@ def review_code(
 
     findings = [*scan_findings, *logic_findings]
     structured_findings = [*structured_from_scan, *logic_structured]
-    inconclusive = scan_error is not None or logic_inconclusive
+    inconclusive = memory_unavailable or scan_error is not None or logic_inconclusive
     incomplete_message = logic_summary or "inconclusive — logic review could not complete"
     if scan_error is not None:
         incomplete_message = "inconclusive — static scan could not complete."
         if (logic_inconclusive or claim_unverified) and logic_summary:
             incomplete_message += f" {logic_summary}"
+    if memory_unavailable:
+        memory_note = "Lesson memory could not initialize."
+        if scan_error is not None or logic_inconclusive:
+            incomplete_message += f" {memory_note}"
+        else:
+            incomplete_message = f"inconclusive — {memory_note}"
 
     if not findings:
         _emit_stage(on_stage, "building_report")
@@ -667,7 +681,12 @@ def review_code(
     if findings:
         _emit_stage(on_stage, "workers")
     reviewed = [
-        _review_finding(finding, max_iterations=max_iterations) for finding in findings
+        _review_finding(
+            finding,
+            max_iterations=max_iterations,
+            memory_available=not memory_unavailable,
+        )
+        for finding in findings
     ]
 
     _emit_stage(on_stage, "building_report")
