@@ -388,7 +388,7 @@ def test_single_file_cli_still_calls_supervise_review_once(
             },
         }
 
-    monkeypatch.setattr(cli, "supervise_review", fake_supervise)
+    monkeypatch.setattr("app.supervisor.supervise_review", fake_supervise)
 
     result = CliRunner().invoke(cli.app, ["review", str(target)])
 
@@ -416,7 +416,7 @@ def test_directory_cli_prints_selection_and_skips_init(
             "summary": {"accepted_count": 0, "needs_review_count": 0},
         }
 
-    monkeypatch.setattr(cli, "supervise_review", fake_supervise)
+    monkeypatch.setattr("app.supervisor.supervise_review", fake_supervise)
     result = CliRunner().invoke(
         cli.app,
         ["review", str(tmp_path), "--max-files", "4", "--workers", "1"],
@@ -449,7 +449,7 @@ def test_directory_cli_verbose_flag_is_accepted(
             "summary": {"accepted_count": 1, "needs_review_count": 0},
         }
 
-    monkeypatch.setattr(cli, "supervise_review", fake_supervise)
+    monkeypatch.setattr("app.supervisor.supervise_review", fake_supervise)
     result = CliRunner().invoke(
         cli.app,
         [

@@ -12,15 +12,9 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 
-from app.agent import review_changed_files
 from app.gitdiff import GitDiffError, collect_diff_selection
-from app.hooks import live_stderr_scope
-from app.memory import search_memory, seed_memory
 from app.multifile import FileSelection, review_python_files, select_python_files
 from app.progress import ReviewProgress
-from app.scanner import ScanError
-from app.supervisor import supervise_review
-from app.websearch import search_web
 
 app = typer.Typer(
     name="secondpass",
@@ -33,6 +27,69 @@ console = Console()
 @app.callback()
 def main() -> None:
     """Personal security review agent."""
+
+
+@app.command()
+def doctor() -> None:
+    """Inspect local package metadata and state paths without running integrations."""
+    import sqlite3
+    import sys
+    from importlib.metadata import PackageNotFoundError, version
+
+    problems = False
+    install_commands: list[str] = []
+    table = Table(title="SecondPass local setup inventory")
+    table.add_column("Item")
+    table.add_column("Local observation", overflow="fold")
+    try:
+        package_version = version("secondpass")
+    except PackageNotFoundError:
+        package_version = "distribution metadata unavailable (source checkout)"
+    table.add_row("SecondPass", Text(package_version))
+    table.add_row("Python", Text(sys.version.split()[0]))
+    table.add_row("SQLite linked runtime", Text(sqlite3.sqlite_version))
+    for label, package in (
+        ("Semgrep package", "semgrep"),
+        ("Provider SDK package", "openai"),
+        ("Lesson memory package", "chromadb"),
+        ("Web search package", "tavily-python"),
+    ):
+        try:
+            observation = version(package)
+        except PackageNotFoundError:
+            problems = True
+            observation = "missing"
+            install_commands.append(f"python -m pip install {package}")
+        table.add_row(label, Text(observation))
+    state_paths = None
+    try:
+        from app.state_paths import DEFAULT_STATE_PATHS
+    except ValueError:
+        problems = True
+        table.add_row("State paths", Text("SECONDPASS_DATA_DIR must be an absolute path."))
+    else:
+        state_paths = DEFAULT_STATE_PATHS
+    console.print(table)
+    if state_paths is not None:
+        for label, path in (
+            ("Review database", state_paths.review_db),
+            ("Lesson memory", state_paths.memory_dir),
+            ("Hook log", state_paths.tool_log),
+        ):
+            console.print(Text(f"{label}: {path}"), soft_wrap=True)
+    if install_commands:
+        console.print("Install missing packages in the same Python environment:")
+        for command in install_commands:
+            console.print(Text(command))
+    console.print(
+        "Package presence only: runtime startup, credentials, network access, "
+        "security patch provenance and state writability are not tested. "
+        "No stores were opened and no .env file was loaded.",
+        markup=False,
+        highlight=False,
+    )
+    if problems:
+        raise typer.Exit(code=1)
 
 
 def _render_scan_detail(finding: dict[str, Any]) -> Panel:
@@ -631,6 +688,10 @@ def review(
     combined_report: dict[str, Any] | None = None
     security_report: dict[str, Any] | None = None
     try:
+        from app.agent import review_changed_files
+        from app.hooks import live_stderr_scope
+        from app.supervisor import supervise_review
+
         if diff:
             selection = collect_diff_selection()
             if not selection.files:
@@ -727,7 +788,7 @@ def review(
             )
             with ReviewProgress(console) as on_stage:
                 combined_report = supervise_review(str(path), on_stage=on_stage)
-    except (ScanError, GitDiffError, ValueError, RuntimeError) as exc:
+    except (GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc
     except Exception as exc:  # noqa: BLE001 — surface unexpected agent failures cleanly
@@ -750,6 +811,8 @@ def search_memory_cmd(
     n_results: int = typer.Option(3, "--n-results", "-n", help="Max lessons to return."),
 ) -> None:
     """Search the persistent security lesson memory."""
+    from app.memory import search_memory, seed_memory
+
     seeded = seed_memory()
     if seeded:
         console.print(f"Seeded {seeded} lesson(s) into memory.")
@@ -793,6 +856,8 @@ def search_web_cmd(
 ) -> None:
     """Search the web with Tavily and print normalized results."""
     try:
+        from app.websearch import search_web
+
         results = search_web(query, max_results=max_results)
     except RuntimeError as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
