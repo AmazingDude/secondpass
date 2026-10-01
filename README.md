@@ -96,6 +96,12 @@ stores, set `SECONDPASS_DATA_DIR` in the process environment before starting the
 CLI, API, or MCP server. This does not migrate data between locations; existing
 checkout history remains in place.
 
+Run `secondpass --help` or `secondpass doctor` without credentials or network
+access. Neither command loads `.env` or initializes lesson memory. `doctor`
+lists local package versions and state paths; runtime startup, credentials and
+state writability require separate checks. It exits with status 1 for missing
+listed packages or an invalid data-directory override and prints repair steps.
+
 Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disagree on neighboring Architecture labels for the same bug. See [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
 
 ---
