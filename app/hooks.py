@@ -17,10 +17,11 @@ from typing import Any, Callable, Iterator, TypeVar
 from rich.console import Console
 from rich.text import Text
 
+from app.state_paths import DEFAULT_STATE_PATHS
+
 F = TypeVar("F", bound=Callable[..., Any])
 
-_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_LOG_PATH = _ROOT / "tool_calls.log"
+_DEFAULT_LOG_PATH = DEFAULT_STATE_PATHS.tool_log
 
 # Live stderr only (file logs keep full ISO timestamps / plain text).
 _stderr_console = Console(

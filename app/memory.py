@@ -12,9 +12,9 @@ from typing import Any
 import chromadb
 
 from app.hooks import log_tool_call
+from app.state_paths import DEFAULT_STATE_PATHS
 
-_ROOT = Path(__file__).resolve().parent.parent
-_DEFAULT_DB_PATH = _ROOT / ".chromadb"
+_DEFAULT_DB_PATH = DEFAULT_STATE_PATHS.memory_dir
 _COLLECTION_NAME = "security_lessons"
 _MEMORY_INIT_LOCK = threading.RLock()
 

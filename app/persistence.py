@@ -18,9 +18,10 @@ from pydantic import BaseModel, Field
 
 from app.confidence_gate import GateResult
 from app.schema import Finding, ReviewResult
+from app.state_paths import DEFAULT_STATE_PATHS
 
 _ROOT = Path(__file__).resolve().parent.parent
-DEFAULT_DB_PATH = _ROOT / ".secondpass" / "secondpass.db"
+DEFAULT_DB_PATH = DEFAULT_STATE_PATHS.review_db
 _DB_INIT_LOCK = threading.RLock()
 _SQLITE_TIMEOUT_SECONDS = 30.0
 
