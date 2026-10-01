@@ -148,6 +148,7 @@ def supervise_finding(
     finding: dict[str, Any],
     *,
     max_iterations: int = 4,
+    memory_available: bool = True,
 ) -> dict[str, Any]:
     """Run supervisor → workers → synthesis for one finding.
 
@@ -155,6 +156,9 @@ def supervise_finding(
     human-accepted promotions remain available for MemoryWorker retrieval;
     durable decisions always go through human accept/reject → SQLite first
     (ACCEPT may then promote a concise lesson into Chroma).
+
+    If lesson-store initialization failed, ``memory_available=False`` skips
+    retrieval and gives synthesis an explicit unavailable-memory result.
     """
     from app.audit import STAGE_CHROMA_SAVE_SKIP, audit_worker_scope, log_audit_stage
 
@@ -164,6 +168,8 @@ def supervise_finding(
         log_agent_event("supervisor received finding; deciding worker routing")
         route, route_failures = _route_workers(finding)
         failures += route_failures
+        if not memory_available:
+            route["use_memory"] = False
         log_agent_event(
             "supervisor routing: "
             f"memory={route['use_memory']} web={route['use_web']} "
@@ -172,6 +178,15 @@ def supervise_finding(
 
         memory_result: dict[str, Any] | None = None
         web_result: dict[str, Any] | None = None
+        if not memory_available:
+            memory_result = {
+                "unavailable": True,
+                "error": "Lesson memory could not initialize.",
+                "searched": False,
+                "worth_reporting": False,
+                "matches": [],
+                "best_match": None,
+            }
 
         if route["use_memory"]:
             log_agent_event("supervisor -> memory_worker")
