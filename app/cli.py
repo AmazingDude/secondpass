@@ -811,13 +811,17 @@ def search_memory_cmd(
     n_results: int = typer.Option(3, "--n-results", "-n", help="Max lessons to return."),
 ) -> None:
     """Search the persistent security lesson memory."""
-    from app.memory import search_memory, seed_memory
+    from app.memory import MissingMemoryDependencyError, search_memory, seed_memory
 
-    seeded = seed_memory()
+    try:
+        seeded = seed_memory()
+        matches = search_memory(query, n_results=n_results)
+    except MissingMemoryDependencyError as exc:
+        console.print(Text(str(exc)), soft_wrap=True)
+        raise typer.Exit(code=1) from None
     if seeded:
         console.print(f"Seeded {seeded} lesson(s) into memory.")
 
-    matches = search_memory(query, n_results=n_results)
     if not matches:
         console.print("No lessons found. Seed memory first or add findings.")
         raise typer.Exit(code=1)

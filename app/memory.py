@@ -7,9 +7,10 @@ import threading
 import uuid
 from importlib.resources import files
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
-import chromadb
+if TYPE_CHECKING:
+    import chromadb
 
 from app.hooks import log_tool_call
 from app.state_paths import DEFAULT_STATE_PATHS
@@ -17,6 +18,10 @@ from app.state_paths import DEFAULT_STATE_PATHS
 _DEFAULT_DB_PATH = DEFAULT_STATE_PATHS.memory_dir
 _COLLECTION_NAME = "security_lessons"
 _MEMORY_INIT_LOCK = threading.RLock()
+
+
+class MissingMemoryDependencyError(RuntimeError):
+    """The lesson store's ChromaDB package is not installed."""
 
 
 def _lesson_document(lesson: dict[str, Any]) -> str:
@@ -44,6 +49,15 @@ def _lesson_metadata(lesson: dict[str, Any]) -> dict[str, str]:
 
 def init_memory(persist_directory: str | Path | None = None) -> chromadb.Collection:
     """Initialize a persistent ChromaDB collection on disk."""
+    try:
+        import chromadb
+    except ModuleNotFoundError as exc:
+        if exc.name != "chromadb":
+            raise
+        raise MissingMemoryDependencyError(
+            "Lesson memory requires ChromaDB. Install it with: python -m pip install chromadb"
+        ) from None
+
     with _MEMORY_INIT_LOCK:
         db_path = Path(persist_directory) if persist_directory else _DEFAULT_DB_PATH
         db_path.mkdir(parents=True, exist_ok=True)
