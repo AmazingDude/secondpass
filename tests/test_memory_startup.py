@@ -53,7 +53,7 @@ def unavailable_memory(monkeypatch, tmp_path: Path):
         raise RuntimeError(canary)
 
     monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", tmp_path / "memory")
-    monkeypatch.setattr("app.memory.chromadb.PersistentClient", unavailable_client)
+    monkeypatch.setattr("chromadb.PersistentClient", unavailable_client)
     return canary
 
 

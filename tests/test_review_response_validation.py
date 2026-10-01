@@ -30,7 +30,7 @@ def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", tmp_path / "chroma")
     collection = SimpleNamespace(count=lambda: 1)
     monkeypatch.setattr(
-        "app.memory.chromadb.PersistentClient",
+        "chromadb.PersistentClient",
         lambda **kwargs: SimpleNamespace(get_or_create_collection=lambda **kw: collection),
     )
     monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [])
