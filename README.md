@@ -88,6 +88,14 @@ TAVILY_API_KEY=...
 
 Only the key for your chosen `LLM_PROVIDER` is required. If `LLM_MODEL` is set to an OpenAI id while using Groq, Groq will 404: clear it or set a model that provider accepts.
 
+Writable state depends on how SecondPass is run. A Git checkout keeps its existing
+`.secondpass/secondpass.db`, `.chromadb/`, and `tool_calls.log`. An installed wheel
+uses the operating system's per-user data and log directories instead of writing
+beside its installed code. To choose an absolute writable directory for all three
+stores, set `SECONDPASS_DATA_DIR` in the process environment before starting the
+CLI, API, or MCP server. This does not migrate data between locations; existing
+checkout history remains in place.
+
 Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disagree on neighboring Architecture labels for the same bug. See [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
 
 ---

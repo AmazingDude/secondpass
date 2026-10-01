@@ -15,6 +15,7 @@ dependencies = [
     "mcp>=1.0,<2",
     "openai",
     "pydantic>=2",
+    "platformdirs>=4.9,<5",
     "python-dotenv",
     "rich",
     "semgrep",
