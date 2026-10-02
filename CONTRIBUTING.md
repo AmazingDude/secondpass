@@ -20,11 +20,13 @@ On Windows PowerShell, use `py -3.12 -m venv .venv` followed by
 `.\.venv\Scripts\Activate.ps1` instead. Then install the app and test tools:
 
 ```sh
-python -m pip install -e ".[dev]"
+python -m pip install -e ".[dev,memory]"
 ```
 
-The `dev` extra supplies pytest. A normal `pip install -e .` or
-`pip install -r requirements.txt` installs runtime dependencies only.
+The `dev` extra supplies test/build tools; `memory` installs ChromaDB for the
+lesson-store tests. A normal `pip install -e .` installs runtime dependencies
+without lesson memory. `pip install -r requirements.txt` preserves the full
+runtime profile with memory, using `pyproject.toml` as the dependency source.
 Python dependencies are not locked yet: fresh installs can resolve newer
 versions, and CI checks that the resolved dependencies are compatible.
 
