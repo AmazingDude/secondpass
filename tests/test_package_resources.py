@@ -491,7 +491,9 @@ def semgrep(command, **kwargs):
             'results': [{}], 'errors': [], 'paths': {'scanned': [str(target)]},
         }))
     payload = {
-        'results': [] if case in {'skipped', 'clean'} else [{'check_id': 'secondpass.python.subprocess-shell',
+        'results': [] if case in {'skipped', 'clean'} else [{
+                     'check_id': 'secondpass.python.subprocess-shell' if '--no-rewrite-rule-ids' in command
+                                 else 'installed.app.secondpass.python.subprocess-shell',
                      'path': str(target), 'start': {'line': 2}, 'end': {'line': 2},
                      'extra': {'severity': 'WARNING', 'message': 'Inspect shell execution.'}}],
         'errors': None if case == 'invalid-errors' else
@@ -521,7 +523,7 @@ def test_installed_static_cli_runs_without_agent_integrations(
     assert result.returncode == 0, result.stdout + result.stderr
     assert "Static rule matches: 1" in result.stdout
     assert "limited Python rule pack" in result.stdout
-    assert "secondpass.python.subprocess-shell" in result.stdout
+    assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
     assert not (tmp_path / "state" / "chromadb").exists()
 
 
@@ -575,7 +577,7 @@ def test_installed_static_cli_with_real_semgrep(
     assert f"Static rule matches: {count}" in result.stdout
     assert "limited Python rule pack" in result.stdout
     if count:
-        assert "secondpass.python.subprocess-shell" in result.stdout
+        assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
     assert not (tmp_path / "state" / "chromadb").exists()
 
 

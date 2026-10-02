@@ -116,7 +116,7 @@ def run_static_scan(
     for config in configs:
         command.extend(["--config", config])
     if config_path is not None:
-        command.extend(["--metrics=off", "--disable-version-check"])
+        command.extend(["--metrics=off", "--disable-version-check", "--no-rewrite-rule-ids"])
     command.extend(["--json", *paths])
 
     try:
