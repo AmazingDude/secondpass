@@ -9,18 +9,24 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-from fastapi import FastAPI, HTTPException, Query
+from fastapi import FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
 from app.jobs import job_store
 from app.multifile import select_python_files
 from app.persistence import (
     DEFAULT_DB_PATH,
+    InvalidHistoryWindowError,
+    LegacyRunDetail,
+    LegacyRunPage,
     get_review,
+    get_run,
     list_audit_events,
     list_outcomes_for_file,
     list_reviews,
+    list_runs,
 )
 from app.verified import record_finding_decision
 
@@ -102,6 +108,42 @@ def _serialize_outcome(stored: Any, memory_promotion: dict[str, Any] | None = No
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/v1/runs", response_model=LegacyRunPage)
+def list_legacy_runs(
+    limit: int = Query(50, ge=1, le=100),
+    snapshot_review_id: int | None = Query(None, ge=0, le=2**63 - 1),
+    before_review_id: int | None = Query(None, ge=1, le=2**63 - 1),
+) -> LegacyRunPage:
+    """Discover saved review groups; legacy execution/coverage are unknown."""
+    return list_runs(
+        limit=limit, snapshot_review_id=snapshot_review_id,
+        before_review_id=before_review_id, db_path=DEFAULT_DB_PATH,
+    )
+
+
+@app.exception_handler(InvalidHistoryWindowError)
+def invalid_history_window_handler(
+    _request: Request, exc: InvalidHistoryWindowError,
+) -> JSONResponse:
+    return JSONResponse(status_code=422, content={"detail": str(exc)})
+
+
+@app.get("/v1/runs/{job_id:path}", response_model=LegacyRunDetail)
+def get_legacy_run(
+    job_id: str, limit: int = Query(50, ge=1, le=100),
+    snapshot_review_id: int | None = Query(None, ge=0, le=2**63 - 1),
+    before_review_id: int | None = Query(None, ge=1, le=2**63 - 1),
+) -> LegacyRunDetail:
+    """Read recorded worker results, not a reconstructed live-job report."""
+    detail = get_run(
+        job_id, limit=limit, snapshot_review_id=snapshot_review_id,
+        before_review_id=before_review_id, db_path=DEFAULT_DB_PATH,
+    )
+    if detail is None:
+        raise HTTPException(status_code=404, detail="No saved reviews for this job_id")
+    return detail
 
 
 @app.post("/reviews", status_code=202, response_model=JobAccepted)

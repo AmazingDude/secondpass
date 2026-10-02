@@ -12,7 +12,7 @@ import threading
 from contextlib import contextmanager
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterator, Literal
 
 from pydantic import BaseModel, Field
 
@@ -85,6 +85,36 @@ class StoredReview(BaseModel):
     needs_review_count: int = Field(ge=0)
     gate_result: GateResult
     job_id: str | None = None
+
+
+class LegacyRun(BaseModel):
+    """Recorded review grouping, not proof of a completed execution."""
+
+    job_id: str
+    metadata_status: Literal["legacy"] = "legacy"
+    execution_status: Literal["unknown"] = "unknown"
+    coverage_status: Literal["unknown"] = "unknown"
+    review_count: int = Field(ge=1)
+    latest_review_id: int = Field(ge=1)
+
+
+class LegacyRunPage(BaseModel):
+    schema_version: Literal[1] = 1
+    runs: list[LegacyRun]
+    snapshot_review_id: int = Field(ge=0)
+    next_before_review_id: int | None = Field(default=None, ge=1)
+
+
+class LegacyRunDetail(BaseModel):
+    schema_version: Literal[1] = 1
+    run: LegacyRun
+    reviews: list[StoredReview]
+    snapshot_review_id: int = Field(ge=0)
+    next_before_review_id: int | None = Field(default=None, ge=1)
+
+
+class InvalidHistoryWindowError(ValueError):
+    """A requested page does not describe a valid saved-review window."""
 
 
 class StoredVerifiedOutcome(BaseModel):
@@ -311,6 +341,90 @@ def list_reviews(
             (limit,),
         ).fetchall()
     return [_row_to_review(row) for row in rows]
+
+
+def _history_window(
+    conn: sqlite3.Connection, limit: int, snapshot: int | None, before: int | None,
+) -> int:
+    if not 1 <= limit <= 100:
+        raise InvalidHistoryWindowError("History limit must be between 1 and 100")
+    for value, minimum in ((snapshot, 0), (before, 1)):
+        if value is not None and not minimum <= value <= 2**63 - 1:
+            raise InvalidHistoryWindowError("History review ID is out of range")
+    conn.execute("BEGIN")
+    maximum = conn.execute(
+        "SELECT COALESCE(MAX(id), 0) FROM reviews"
+    ).fetchone()[0]
+    if snapshot is not None and snapshot > maximum:
+        raise InvalidHistoryWindowError("History snapshot exceeds saved review records")
+    return snapshot if snapshot is not None else maximum
+
+
+def _run_groups(
+    conn: sqlite3.Connection, snapshot: int, *, limit: int,
+    job_id: str | None = None, before: int | None = None,
+) -> list[sqlite3.Row]:
+    # Only fixed SQL fragments are composed; IDs and cursors are bound values.
+    where = "id <= ? AND job_id IS NOT NULL AND trim(job_id) != ''"
+    params: list[Any] = [snapshot]
+    if job_id is not None:
+        where += " AND job_id = ?"
+        params.append(job_id)
+    having = ""
+    if before is not None:
+        having = "HAVING MAX(id) < ?"
+        params.append(before)
+    params.append(limit)
+    return conn.execute(
+        f"""
+        SELECT job_id, COUNT(*) AS review_count, MAX(id) AS latest_review_id
+        FROM reviews WHERE {where} GROUP BY job_id {having}
+        ORDER BY latest_review_id DESC LIMIT ?
+        """, params,
+    ).fetchall()
+
+
+def list_runs(
+    *, limit: int = 50, snapshot_review_id: int | None = None,
+    before_review_id: int | None = None, db_path: Path | str | None = None,
+) -> LegacyRunPage:
+    """Page recorded groups by newest saved row, not invented run start time."""
+    init_db(db_path)
+    with _connection(db_path) as conn:
+        snapshot = _history_window(conn, limit, snapshot_review_id, before_review_id)
+        rows = _run_groups(conn, snapshot, limit=limit + 1, before=before_review_id)
+    return LegacyRunPage(
+        runs=[LegacyRun(**dict(row)) for row in rows[:limit]],
+        snapshot_review_id=snapshot,
+        next_before_review_id=rows[limit - 1]["latest_review_id"] if len(rows) > limit else None,
+    )
+
+
+def get_run(
+    job_id: str, *, limit: int = 50, snapshot_review_id: int | None = None,
+    before_review_id: int | None = None, db_path: Path | str | None = None,
+) -> LegacyRunDetail | None:
+    """Read saved reviews independently of the process-local job store."""
+    init_db(db_path)
+    with _connection(db_path) as conn:
+        snapshot = _history_window(conn, limit, snapshot_review_id, before_review_id)
+        groups = _run_groups(conn, snapshot, limit=1, job_id=job_id)
+        if not groups:
+            return None
+        before = before_review_id if before_review_id is not None else 2**63 - 1
+        rows = conn.execute(
+            """
+            SELECT * FROM reviews WHERE job_id = ? AND id <= ? AND id < ?
+            ORDER BY id DESC LIMIT ?
+            """,
+            (job_id, snapshot, before, limit + 1),
+        ).fetchall()
+    return LegacyRunDetail(
+        run=LegacyRun(**dict(groups[0])),
+        reviews=[_row_to_review(row) for row in rows[:limit]],
+        snapshot_review_id=snapshot,
+        next_before_review_id=rows[limit - 1]["id"] if len(rows) > limit else None,
+    )
 
 
 def save_verified_outcome(
