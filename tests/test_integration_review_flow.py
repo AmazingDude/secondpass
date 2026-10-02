@@ -1,11 +1,13 @@
 """End-to-end API → Supervisor → gate → persist → outcomes (real chain).
 
-Mocks only Semgrep / LLM chat / seed_memory / web search at the edges.
+Mocks Semgrep, LLM chat, lesson retrieval, and web search at their call sites.
 """
 
 from __future__ import annotations
 
+import asyncio
 import json
+import subprocess
 import time
 from pathlib import Path
 from types import SimpleNamespace
@@ -16,6 +18,7 @@ from fastapi.testclient import TestClient
 
 from app.api import app
 from app.jobs import JobStore
+from app.mcp_server import mcp, review_code_tool
 
 REPO_ROOT = Path(__file__).resolve().parents[1]
 NOTES_IDOR = REPO_ROOT / "benchmark" / "fixtures" / "notes_idor.py"
@@ -37,9 +40,11 @@ class ScriptedChat:
         *,
         logic_confidence: int | None = 95,
         architecture_finding: bool = False,
+        use_memory: bool = False,
     ) -> None:
         self.logic_confidence = logic_confidence
         self.architecture_finding = architecture_finding
+        self.use_memory = use_memory
         self.calls: list[str] = []
 
     def __call__(
@@ -90,9 +95,12 @@ class ScriptedChat:
             return _msg(
                 json.dumps(
                     {
-                        "use_memory": False,
+                        "use_memory": self.use_memory,
                         "use_web": False,
-                        "reason": "Planted IDOR is clear from code alone",
+                        "reason": (
+                            "Check prior lessons" if self.use_memory
+                            else "Planted IDOR is clear from code alone"
+                        ),
                     }
                 )
             )
@@ -187,6 +195,19 @@ def _patch_chat(monkeypatch: pytest.MonkeyPatch, scripted: ScriptedChat) -> None
         monkeypatch.setattr(target, scripted)
 
 
+def _fail_on_memory_access(monkeypatch: pytest.MonkeyPatch) -> None:
+    monkeypatch.setattr(
+        "app.agent.seed_memory",
+        lambda: (_ for _ in ()).throw(RuntimeError("private lesson-store canary")),
+    )
+    monkeypatch.setattr(
+        "app.supervisor.run_memory_worker",
+        lambda *args, **kwargs: (_ for _ in ()).throw(
+            RuntimeError("private retrieval canary")
+        ),
+    )
+
+
 def _wait_job(client: TestClient, job_id: str, *, timeout_s: float = 15.0) -> dict[str, Any]:
     deadline = time.time() + timeout_s
     last: dict[str, Any] | None = None
@@ -244,6 +265,93 @@ def test_happy_path_security_finding_accept_outcome(
     assert listed[0]["accepted"] is True
     assert "Confirmed IDOR" in listed[0]["reason"]
     assert listed[0]["finding"]["finding_type"] == "missing_ownership_check"
+
+
+def test_api_review_without_memory_keeps_accepted_finding(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_chat(monkeypatch, ScriptedChat(logic_confidence=95, use_memory=True))
+    _fail_on_memory_access(monkeypatch)
+
+    submitted = client.post(
+        "/reviews", json={"path": str(NOTES_IDOR), "memory_enabled": False}
+    )
+    assert submitted.status_code == 202
+    job = _wait_job(client, submitted.json()["job_id"])
+
+    assert job["status"] == "completed"
+    assert job["options"]["memory_enabled"] is False
+    security_id = job["persisted_review_ids"]["security"]
+    review = client.get(f"/reviews/{security_id}").json()
+    assert review["review_result"]["coverage_status"] == "ok"
+    assert review["accepted_count"] == 1
+    assert "private lesson-store canary" not in json.dumps(job)
+    assert "private retrieval canary" not in json.dumps(job)
+
+
+def test_api_directory_without_memory_reviews_each_file(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    source = NOTES_IDOR.read_text(encoding="utf-8")
+    for name in ("a.py", "b.py"):
+        (root / name).write_text(source, encoding="utf-8")
+    _patch_chat(monkeypatch, ScriptedChat(logic_confidence=95, use_memory=True))
+    _fail_on_memory_access(monkeypatch)
+
+    submitted = client.post(
+        "/reviews", json={"path": str(root), "memory_enabled": False, "max_files": 2}
+    )
+    assert submitted.status_code == 202
+    job = _wait_job(client, submitted.json()["job_id"])
+
+    assert job["status"] == "completed"
+    assert job["options"]["memory_enabled"] is False
+    assert job["result"]["selection"]["selected"] == ["a.py", "b.py"]
+    assert job["summary"]["accepted_count"] == 2
+    for review_id in job["persisted_review_ids"]:
+        review = client.get(f"/reviews/{review_id}").json()
+        assert review["review_result"]["coverage_status"] == "ok"
+    assert "private lesson-store canary" not in json.dumps(job)
+    assert "private retrieval canary" not in json.dumps(job)
+
+
+def test_mcp_path_without_memory_keeps_finding_and_advertises_option(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch
+) -> None:
+    _patch_chat(monkeypatch, ScriptedChat(logic_confidence=95, use_memory=True))
+    _fail_on_memory_access(monkeypatch)
+
+    tool = next(tool for tool in asyncio.run(mcp.list_tools()) if tool.name == "review_code")
+    assert tool.inputSchema["properties"]["memory_enabled"]["type"] == "boolean"
+    report = json.loads(review_code_tool(path=str(NOTES_IDOR), memory_enabled=False))
+
+    assert report["review_result"]["coverage_status"] == "ok"
+    assert report["finding_count"] == 1
+    assert "private lesson-store canary" not in json.dumps(report)
+    assert "private retrieval canary" not in json.dumps(report)
+
+
+def test_mcp_diff_without_memory_reviews_changed_lines(
+    client: TestClient, monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    root = tmp_path / "project"
+    root.mkdir()
+    (root / "notes.py").write_text(NOTES_IDOR.read_text(encoding="utf-8"), encoding="utf-8")
+    subprocess.run(["git", "init", "--quiet"], cwd=root, check=True)
+    subprocess.run(["git", "add", "notes.py"], cwd=root, check=True)
+    monkeypatch.chdir(root)
+    _patch_chat(monkeypatch, ScriptedChat(logic_confidence=95, use_memory=True))
+    _fail_on_memory_access(monkeypatch)
+
+    report = json.loads(review_code_tool(diff=True, memory_enabled=False))
+
+    assert report["diff_mode"] == "staged"
+    assert report["review_result"]["coverage_status"] == "ok"
+    assert report["finding_count"] == 1
+    assert "private lesson-store canary" not in json.dumps(report)
+    assert "private retrieval canary" not in json.dumps(report)
 
 
 def test_needs_review_then_explicit_reject(

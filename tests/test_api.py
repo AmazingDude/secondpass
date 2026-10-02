@@ -312,8 +312,11 @@ def test_directory_submit_runs_selected_files_end_to_end(
     (root / "b.py").write_text("VALUE = 2\n", encoding="utf-8")
     reviewed: list[str] = []
 
-    def fake_supervise(path: str, *, job_id: str | None = None) -> dict:
+    def fake_supervise(
+        path: str, *, job_id: str | None = None, memory_enabled: bool = True
+    ) -> dict:
         assert job_id
+        assert memory_enabled is True
         reviewed.append(Path(path).name)
         return _fake_combined(path)
 

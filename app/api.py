@@ -48,6 +48,7 @@ app.add_middleware(
 
 class ReviewSubmit(BaseModel):
     path: str = Field(..., min_length=1, description="File or directory to review.")
+    memory_enabled: bool = Field(True, description="Use saved lesson memory during review.")
     workers: int = Field(2, ge=1, description="Concurrent file reviews for directories.")
     max_files: int = Field(10, ge=1, description="Maximum eligible files for directories.")
     include_init: bool = False
@@ -111,6 +112,7 @@ def submit_review(body: ReviewSubmit) -> JobAccepted:
         raise HTTPException(status_code=400, detail=f"Path does not exist: {body.path}")
     job = job_store.submit(
         str(target.resolve()),
+        memory_enabled=body.memory_enabled,
         workers=body.workers,
         max_files=body.max_files,
         include_init=body.include_init,

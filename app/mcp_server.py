@@ -42,11 +42,13 @@ def _json_report(report: dict[str, Any]) -> str:
 def review_code_tool(
     path: str | None = None,
     diff: bool = False,
+    memory_enabled: bool = True,
 ) -> str:
     """Run secondpass security review and return a structured JSON report.
 
     Use this when you need a personal security pass over code: Semgrep scan,
-    memory of past lessons, optional web context, and an LLM explanation/fix.
+    optional memory of past lessons, optional web context, and an LLM explanation/fix.
+    Set memory_enabled=false to skip lesson indexing and retrieval.
 
     Modes (mutually exclusive):
     - path mode: pass `path` to a file or directory (absolute or relative).
@@ -111,12 +113,13 @@ def review_code_tool(
             report = review_changed_files(
                 selection.files,
                 mode=selection.mode,
+                memory_enabled=memory_enabled,
             )
         else:
             target = Path(path).expanduser()
             if not target.exists():
                 raise FileNotFoundError(f"Path does not exist: {target}")
-            report = review_code(str(target.resolve()))
+            report = review_code(str(target.resolve()), memory_enabled=memory_enabled)
     except (ScanError, GitDiffError, FileNotFoundError, ValueError) as exc:
         return _json_report({"error": str(exc), "finding_count": 0, "findings": []})
     except Exception as exc:  # noqa: BLE001 — keep MCP process alive on unexpected errors
