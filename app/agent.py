@@ -618,7 +618,7 @@ def review_code(
             scan_findings = run_static_scan([target])
         except ScanError as exc:
             scan_error = str(exc)
-            scan_findings = []
+            scan_findings = exc.findings
             log_agent_event(f"supervisor scan error: {scan_error}")
 
     scan_empty = not scan_findings

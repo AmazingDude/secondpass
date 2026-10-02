@@ -45,6 +45,10 @@ class Finding(TypedDict):
 class ScanError(RuntimeError):
     """Raised when Semgrep cannot complete a scan."""
 
+    def __init__(self, message: str, *, findings: list[Finding] | None = None) -> None:
+        super().__init__(message)
+        self.findings = findings or []
+
 
 def format_semgrep_failure_message(*, stderr: str = "", stdout: str = "") -> str:
     """Map Semgrep failure text to a short CLI-safe message (no raw traceback dump)."""
@@ -95,7 +99,9 @@ def _source_snippet(result: dict) -> str:
 
 
 @log_tool_call
-def run_static_scan(paths: list[str]) -> list[Finding]:
+def run_static_scan(
+    paths: list[str], *, config_path: str | Path | None = None
+) -> list[Finding]:
     """Run Semgrep against paths and return normalized findings."""
     if not paths:
         raise ValueError("At least one path is required.")
@@ -105,16 +111,13 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
     except FileNotFoundError as exc:
         raise ScanError(str(exc)) from exc
 
-    command = [
-        semgrep_bin,
-        "scan",
-        "--config",
-        "p/python",
-        "--config",
-        "p/javascript",
-        "--json",
-        *paths,
-    ]
+    configs = [str(config_path)] if config_path is not None else ["p/python", "p/javascript"]
+    command = [semgrep_bin, "scan"]
+    for config in configs:
+        command.extend(["--config", config])
+    if config_path is not None:
+        command.extend(["--metrics=off", "--disable-version-check"])
+    command.extend(["--json", *paths])
 
     try:
         completed = subprocess.run(
@@ -123,6 +126,7 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
             text=True,
             encoding="utf-8",
             check=False,
+            timeout=60 if config_path is not None else None,
         )
     except FileNotFoundError as exc:
         raise ScanError(
@@ -138,7 +142,7 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
             format_semgrep_failure_message(stderr=str(exc))
         ) from exc
 
-    if completed.returncode != 0:
+    if completed.returncode != 0 and config_path is None:
         raise ScanError(
             format_semgrep_failure_message(
                 stderr=completed.stderr or "",
@@ -150,19 +154,61 @@ def run_static_scan(paths: list[str]) -> list[Finding]:
         payload = json.loads(completed.stdout)
     except json.JSONDecodeError as exc:
         raise ScanError("Semgrep returned invalid JSON output.") from exc
+    if not isinstance(payload, dict) or not isinstance(payload.get("results"), list):
+        raise ScanError("Semgrep returned invalid result data.")
 
     findings: list[Finding] = []
+    invalid_results = False
     for result in payload.get("results", []):
+        if not isinstance(result, dict) or any(
+            not isinstance(result.get(field, {}), dict)
+            for field in ("extra", "start", "end")
+        ):
+            invalid_results = True
+            continue
         extra = result.get("extra", {})
+        start_line = result.get("start", {}).get("line")
+        end_line = result.get("end", {}).get("line", start_line)
+        if (
+            not all(
+                isinstance(result.get(field), str) and result[field] and "\x00" not in result[field]
+                for field in ("check_id", "path")
+            )
+            or type(start_line) is not int or start_line < 1
+            or type(end_line) is not int or end_line < start_line
+            or not all(isinstance(extra.get(field, ""), str) for field in ("severity", "message", "lines"))
+        ):
+            invalid_results = True
+            continue
         findings.append(
             {
                 "rule_id": result.get("check_id", ""),
                 "severity": extra.get("severity", ""),
                 "path": result.get("path", ""),
-                "line": result.get("start", {}).get("line", 0),
+                "line": start_line,
                 "message": extra.get("message", ""),
                 "snippet": _source_snippet(result),
             }
         )
 
+    if invalid_results:
+        raise ScanError("Semgrep returned invalid finding data.", findings=findings)
+    if config_path is not None:
+        path_info = payload.get("paths")
+        scanned_paths = path_info.get("scanned") if isinstance(path_info, dict) else None
+        if not isinstance(scanned_paths, list) or not all(isinstance(path, str) for path in scanned_paths):
+            raise ScanError("Semgrep returned invalid coverage data.", findings=findings)
+        if not isinstance(payload.get("errors"), list):
+            raise ScanError("Semgrep returned invalid error data.", findings=findings)
+        try:
+            scanned = {Path(path).resolve() for path in scanned_paths}
+            requested = {Path(path).resolve() for path in paths}
+        except (OSError, ValueError) as exc:
+            raise ScanError("Semgrep returned invalid coverage paths.", findings=findings) from exc
+        if (
+            completed.returncode != 0
+            or payload.get("errors")
+            or not requested.issubset(scanned)
+        ):
+            raise ScanError("Semgrep reported incomplete analysis.", findings=findings)
     return findings

@@ -108,6 +108,30 @@ Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disa
 
 ## CLI
 
+### Try a scan without model keys
+
+After installing the Python package and its dependencies, run:
+
+```bash
+secondpass review path/to/file.py --mode static
+```
+
+This file-only mode uses a bundled first-party Semgrep rule for
+`subprocess.run(..., shell=True)`. It does not load `.env`, call a model, retrieve
+lessons or search the web; no provider key is needed. Matches are risky API
+patterns to inspect, not confirmed vulnerabilities. Zero matches does not imply
+the absence of security or architecture bugs. An incomplete scan exits with
+status 1 and retains any available matches; a complete scan exits with status 0,
+even when matches exist. Static scans are not saved to review history yet.
+
+The bundled rule does not require registry downloads; metrics and version checks
+are disabled. Semgrep must still run on your machine. The real-engine smoke test
+runs on Linux CI; Windows engine startup has not been validated. Directory and
+diff reviews, the API, dashboard and MCP remain assisted workflows. Omitting
+`--mode` preserves the existing assisted default and its provider requirements.
+
+### Assisted reviews and history
+
 ```bash
 secondpass --help
 # alternative without editable install: python -m app.cli --help
