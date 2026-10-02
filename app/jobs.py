@@ -177,8 +177,10 @@ class JobStore:
                 options = dict(self._jobs[job_id].options)
             result = self._call_runner(path, job_id, options)
             self._update(job_id, status="completed", result=result, error=None)
-        except Exception as exc:  # noqa: BLE001 — surface as failed job status
-            self._update(job_id, status="failed", error=f"{type(exc).__name__}: {exc}")
+        except Exception:  # noqa: BLE001 — surface as failed job status
+            self._update(
+                job_id, status="failed", error="Review failed. Check your setup and retry."
+            )
 
     def _call_runner(
         self, path: str, job_id: str, options: dict[str, Any]
