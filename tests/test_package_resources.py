@@ -435,3 +435,166 @@ def test_installed_cli_can_disable_lesson_retrieval(
     if mode == "diff":
         assert f"Findings reviewed: {finding_count}" in result.stdout
         assert "Coverage: inconclusive" not in result.stdout
+
+
+_INSTALLED_STATIC_SCRIPT = """
+import importlib.abc
+import importlib.metadata as metadata
+import json
+import socket
+import sqlite3
+import sys
+from pathlib import Path
+from types import SimpleNamespace
+
+class NoAgentIntegrations(importlib.abc.MetaPathFinder):
+    def find_spec(self, fullname, path=None, target=None):
+        if fullname.split('.')[0] in {'openai', 'chromadb', 'tavily', 'dotenv', 'fastapi', 'mcp', 'uvicorn'}:
+            raise AssertionError('Static mode must not import agent integrations')
+
+def no_network(*args, **kwargs):
+    raise AssertionError('Static CLI must not contact the network')
+
+sys.meta_path.insert(0, NoAgentIntegrations())
+socket.socket.connect = no_network
+socket.socket.connect_ex = no_network
+socket.getaddrinfo = no_network
+sqlite3.connect = no_network
+install_dir = Path(sys.argv[1])
+case = sys.argv[2]
+sys.path.insert(0, str(install_dir))
+from app import scanner
+target = Path('shell.py').resolve()
+target.write_text(
+    'import subprocess\\nsubprocess.run(["echo", "hello"], shell=False)\\n'
+    if case in {'clean', 'real-clean'} else
+    'import subprocess\\nsubprocess.run(command, shell=True)\\n'
+)
+
+def semgrep(command, **kwargs):
+    configs = [command[i + 1] for i, value in enumerate(command) if value == '--config']
+    assert len(configs) == 1
+    rule_path = Path(configs[0])
+    assert rule_path.is_relative_to(install_dir)
+    assert rule_path.is_file()
+    assert 'subprocess.run' in rule_path.read_text()
+    assert '--metrics=off' in command
+    assert '--disable-version-check' in command
+    if case == 'malformed':
+        return SimpleNamespace(returncode=0, stderr='', stdout='[]')
+    if case == 'malformed-findings':
+        return SimpleNamespace(returncode=0, stderr='', stdout='{"results": [null]}')
+    if case == 'malformed-coverage':
+        return SimpleNamespace(returncode=0, stderr='', stdout='{"results": [], "paths": null}')
+    if case == 'empty-finding':
+        return SimpleNamespace(returncode=0, stderr='', stdout=json.dumps({
+            'results': [{}], 'errors': [], 'paths': {'scanned': [str(target)]},
+        }))
+    payload = {
+        'results': [] if case in {'skipped', 'clean'} else [{
+                     'check_id': 'secondpass.python.subprocess-shell' if '--no-rewrite-rule-ids' in command
+                                 else 'installed.app.secondpass.python.subprocess-shell',
+                     'path': str(target), 'start': {'line': 2}, 'end': {'line': 2},
+                     'extra': {'severity': 'WARNING', 'message': 'Inspect shell execution.'}}],
+        'errors': None if case == 'invalid-errors' else
+                  [{'message': 'private-scanner-error-canary'}] if case == 'partial' else [],
+        'paths': {'scanned': [] if case == 'skipped' else
+                  [str(target) + chr(0)] if case == 'invalid-path' else [str(target)]},
+    }
+    if case == 'invalid-finding-path':
+        payload['results'].append({**payload['results'][0], 'path': str(target) + chr(0)})
+    return SimpleNamespace(returncode=2 if case == 'partial-exit' else 0,
+                           stderr='', stdout=json.dumps(payload))
+
+if not case.startswith('real-'):
+    scanner.subprocess.run = semgrep
+entry = next(entry for entry in metadata.distribution('secondpass').entry_points
+             if entry.group == 'console_scripts' and entry.name == 'secondpass')
+run = entry.load()
+sys.argv = ['secondpass', 'review', str(target), '--mode', 'static']
+run()
+"""
+
+
+def test_installed_static_cli_runs_without_agent_integrations(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "finding")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Static rule matches: 1" in result.stdout
+    assert "limited Python rule pack" in result.stdout
+    assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
+    assert not (tmp_path / "state" / "chromadb").exists()
+
+
+def _installed_static_cli(
+    installed_wheel: Path, tmp_path: Path, case: str,
+) -> subprocess.CompletedProcess[str]:
+    environment = {
+        name: value for name, value in os.environ.items()
+        if not name.endswith("_API_KEY") and name not in {"LLM_PROVIDER", "LLM_MODEL", "SEMGREP_APP_TOKEN"}
+    }
+    state_dir = tmp_path / "state"
+    return subprocess.run(
+        [sys.executable, "-c", _INSTALLED_STATIC_SCRIPT, str(installed_wheel), case],
+        cwd=tmp_path,
+        env={**environment, "SECONDPASS_DATA_DIR": str(state_dir),
+             "PYTHONDONTWRITEBYTECODE": "1"},
+        capture_output=True, text=True, timeout=90 if case.startswith("real-") else 30,
+    )
+
+
+@pytest.mark.parametrize("case", ["partial", "partial-exit", "invalid-errors", "invalid-path", "invalid-finding-path"])
+def test_installed_static_cli_preserves_matches_from_incomplete_scan(
+    installed_wheel: Path, tmp_path: Path, case: str,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Static review incomplete" in result.stdout
+    assert "Static rule matches: 1" in result.stdout
+    assert "secondpass.python.subprocess-shell" in result.stdout
+    assert "private-scanner-error-canary" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+
+
+def test_installed_static_cli_labels_complete_zero_match_result(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "clean")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Static rule matches: 0" in result.stdout
+    assert "Zero matches only means this rule did not match" in result.stdout
+    assert "No logic or architecture analysis was performed" in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Real Semgrep startup is validated on Linux CI only")
+@pytest.mark.parametrize("case, count", [("real-finding", 1), ("real-clean", 0)])
+def test_installed_static_cli_with_real_semgrep(
+    installed_wheel: Path, tmp_path: Path, case: str, count: int,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert f"Static rule matches: {count}" in result.stdout
+    assert "limited Python rule pack" in result.stdout
+    if count:
+        assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
+    assert not (tmp_path / "state" / "chromadb").exists()
+
+
+def test_installed_static_cli_does_not_treat_skipped_file_as_complete(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "skipped")
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Static review incomplete" in result.stdout
+    assert "Zero matches only means" not in result.stdout
+
+
+@pytest.mark.parametrize("case", ["malformed", "malformed-findings", "malformed-coverage", "empty-finding"])
+def test_installed_static_cli_handles_malformed_output_without_traceback(
+    installed_wheel: Path, tmp_path: Path, case: str,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Static review incomplete" in result.stdout
+    assert "Traceback" not in result.stderr

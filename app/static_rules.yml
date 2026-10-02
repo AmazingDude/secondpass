@@ -1,0 +1,7 @@
+# First-party rule: a risky API pattern for inspection, not proof of exploitability.
+rules:
+  - id: secondpass.python.subprocess-shell
+    languages: [python]
+    severity: WARNING
+    message: Inspect this shell invocation; untrusted command input can cause command injection. Prefer an argument list with shell=False.
+    pattern: subprocess.run(..., shell=True, ...)

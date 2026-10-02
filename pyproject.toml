@@ -34,4 +34,4 @@ secondpass = "app.cli:run"
 include = ["app*"]
 
 [tool.setuptools.package-data]
-app = ["security_lessons.json"]
+app = ["security_lessons.json", "static_rules.yml"]

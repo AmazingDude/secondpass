@@ -21,6 +21,36 @@ def _response(content: str | None, *, finish_reason: str = "stop") -> SimpleName
     )])
 
 
+def test_assisted_review_keeps_valid_static_match_when_scan_data_is_incomplete(
+    target: Path, monkeypatch,
+) -> None:
+    from app.scanner import run_static_scan
+
+    monkeypatch.setattr("app.agent.run_static_scan", run_static_scan)
+    monkeypatch.setattr("app.scanner.subprocess.run", lambda *a, **kw: SimpleNamespace(
+        returncode=0, stderr="", stdout=json.dumps({"results": [{
+            "check_id": "test.static-match", "path": str(target),
+            "start": {"line": 2}, "end": {"line": 2},
+            "extra": {"severity": "WARNING", "message": "Static rule matched."},
+        }, None]}),
+    ))
+    monkeypatch.setattr("app.agent.chat", lambda *a, **kw: _response(
+        '{"has_issues": false, "summary": "No additional issues.", "issues": []}'
+    ))
+    monkeypatch.setattr("app.supervisor.chat", lambda *a, **kw: _response(
+        '{"use_memory": false, "use_web": false, '
+        '"explanation": "Inspect this static match.", "suggested_fix": "Review in context."}'
+    ))
+
+    report = review_code(str(target), memory_enabled=False)
+
+    assert report["finding_count"] == 1
+    assert report["all_findings"][0]["finding"]["rule_id"] == "test.static-match"
+    assert report["inconclusive"] is True
+    assert report["no_issues"] is False
+    assert report["review_result"]["coverage_status"] == "inconclusive"
+
+
 @pytest.fixture()
 def target(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> Path:
     path = tmp_path / "service.py"

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from enum import Enum
 from pathlib import Path
 from typing import Any
 
@@ -22,6 +23,11 @@ app = typer.Typer(
     no_args_is_help=True,
 )
 console = Console()
+
+
+class ReviewMode(str, Enum):
+    assisted = "assisted"
+    static = "static"
 
 
 @app.callback()
@@ -609,6 +615,10 @@ def review(
         resolve_path=True,
         help="File or directory to review. Omit when using --diff.",
     ),
+    mode: ReviewMode = typer.Option(
+        ReviewMode.assisted, "--mode",
+        help="Assisted review (default) or a limited static Python scan without model keys.",
+    ),
     diff: bool = typer.Option(
         False,
         "--diff",
@@ -675,7 +685,45 @@ def review(
         help="Enable lesson retrieval (default). --no-memory skips store initialization and retrieval.",
     ),
 ) -> None:
-    """Run the full secondpass agent review and display a structured report."""
+    """Run an assisted review or inspect matches from the bundled static rule pack."""
+    if mode is ReviewMode.static:
+        if diff or path is None or not path.is_file() or path.suffix != ".py":
+            console.print(
+                "Static mode currently requires one Python file; directory and diff modes are assisted only.",
+                markup=False,
+            )
+            raise typer.Exit(code=1)
+        from importlib.resources import as_file, files
+        from app.scanner import ScanError, run_static_scan
+
+        incomplete = False
+        try:
+            with as_file(files("app").joinpath("static_rules.yml")) as rule_path:
+                matches = run_static_scan([str(path)], config_path=rule_path)
+        except ScanError as exc:
+            incomplete = True
+            matches = exc.findings
+        console.print("Static mode: limited Python rule pack (subprocess.run with shell=True).", markup=False)
+        console.print(f"Static rule matches: {len(matches)}", markup=False)
+        for match in matches:
+            console.print(_render_scan_detail({
+                "finding": match,
+                "structured_finding": {"detection_method": "static_rule"},
+            }))
+        console.print(
+            "Inspect each match in context. No logic or architecture analysis was performed. "
+            "Static scans are not saved to review history yet.",
+            markup=False,
+        )
+        if incomplete:
+            console.print(
+                "Static review incomplete. Verify Semgrep runs in this environment and can scan the selected file. "
+                "The match count is not a complete result.",
+                markup=False,
+            )
+            raise typer.Exit(code=1)
+        console.print("Zero matches only means this rule did not match.", markup=False)
+        return
     if diff and path is not None:
         console.print(
             "[bold red]Error:[/bold red] Use either `review <path>` or "
