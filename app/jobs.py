@@ -67,12 +67,13 @@ class JobStore:
         include_init: bool = False,
         include: tuple[str, ...] = (),
         exclude: tuple[str, ...] = (),
+        memory_enabled: bool = True,
     ) -> dict[str, Any]:
         target = Path(path)
         from app.supervisor import supervise_review
 
         if target.is_file():
-            return supervise_review(path, job_id=job_id)
+            return supervise_review(path, job_id=job_id, memory_enabled=memory_enabled)
 
         from app.multifile import review_python_files, select_python_files
 
@@ -89,7 +90,9 @@ class JobStore:
         aggregate = review_python_files(
             selection.selected,
             workers=workers,
-            review_one=lambda file_path: supervise_review(file_path, job_id=job_id),
+            review_one=lambda file_path: supervise_review(
+                file_path, job_id=job_id, memory_enabled=memory_enabled
+            ),
         )
         aggregate["path"] = str(selection.root)
         aggregate["mode"] = "directory"

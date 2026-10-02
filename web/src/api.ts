@@ -130,6 +130,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 }
 
 export type ReviewOptions = {
+  memory_enabled: boolean;
   workers: number;
   max_files: number;
   include_init: boolean;

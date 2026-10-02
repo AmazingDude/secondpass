@@ -27,6 +27,7 @@ const POLL_MS = 600;
 const PREVIEW_DEBOUNCE_MS = 450;
 
 const DEFAULT_OPTIONS: ReviewOptions = {
+  memory_enabled: true,
   workers: 2,
   max_files: 10,
   include_init: false,
@@ -290,6 +291,7 @@ export function SubmitReview({
   const [workers, setWorkers] = useState(DEFAULT_OPTIONS.workers);
   const [maxFiles, setMaxFiles] = useState(DEFAULT_OPTIONS.max_files);
   const [includeInit, setIncludeInit] = useState(DEFAULT_OPTIONS.include_init);
+  const [memoryEnabled, setMemoryEnabled] = useState(DEFAULT_OPTIONS.memory_enabled);
   const [includeText, setIncludeText] = useState("");
   const [excludeText, setExcludeText] = useState("");
   const [preview, setPreview] = useState<ReviewPreview | null>(null);
@@ -301,13 +303,14 @@ export function SubmitReview({
 
   const reviewOptions = useMemo<ReviewOptions>(
     () => ({
+      memory_enabled: memoryEnabled,
       workers: Math.max(1, workers),
       max_files: Math.max(1, maxFiles),
       include_init: includeInit,
       include: parsePatterns(includeText),
       exclude: parsePatterns(excludeText),
     }),
-    [excludeText, includeInit, includeText, maxFiles, workers],
+    [excludeText, includeInit, includeText, maxFiles, memoryEnabled, workers],
   );
 
   useEffect(() => {
@@ -708,9 +711,21 @@ export function SubmitReview({
             </div>
           </section>
         ) : null}
+        <label className="checkbox-field">
+          <input
+            type="checkbox"
+            checked={memoryEnabled}
+            onChange={(event) => setMemoryEnabled(event.target.checked)}
+            disabled={submitting || polling}
+          />
+          <span>
+            <strong>Use lesson memory</strong>
+            <small>Turn off to skip lesson indexing and retrieval for this review.</small>
+          </span>
+        </label>
         <p className="submit-hint">
-          Security and Architecture both run for every file. Memory and web only
-          light up when the Supervisor routes to them.
+          Security and Architecture run for every file. Web context is used only
+          when routed by the Supervisor; lesson memory also requires this option.
         </p>
         {error && !(jobId || job) ? <p className="error-text">{error}</p> : null}
       </form>
