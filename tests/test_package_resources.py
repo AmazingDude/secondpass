@@ -7,9 +7,11 @@ import stat
 import subprocess
 import sys
 from collections.abc import Iterator
+from importlib.metadata import distributions
 from pathlib import Path
 
 import pytest
+from packaging.requirements import Requirement
 
 
 @pytest.fixture(scope="module")
@@ -59,6 +61,22 @@ def installed_wheel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     finally:
         for path, mode in reversed(readonly_paths):
             path.chmod(mode)
+
+
+def test_installed_wheel_requires_chroma_only_for_memory_extra(installed_wheel: Path) -> None:
+    distribution = next(
+        item for item in distributions(path=[str(installed_wheel)])
+        if item.metadata["Name"] == "secondpass"
+    )
+    requirements = [Requirement(value) for value in distribution.requires or []]
+    chroma = [requirement for requirement in requirements if requirement.name == "chromadb"]
+
+    assert "memory" in distribution.metadata.get_all("Provides-Extra", [])
+    assert len(chroma) == 1
+    assert chroma[0].marker is not None
+    assert not chroma[0].marker.evaluate({"extra": ""})
+    assert not chroma[0].marker.evaluate({"extra": "dev"})
+    assert chroma[0].marker.evaluate({"extra": "memory"})
 
 
 _OFFLINE_CLI_SCRIPT = """
@@ -140,12 +158,13 @@ def test_installed_help_needs_no_integrations(
     assert not (tmp_path / "state").exists()
 
 
-def test_installed_doctor_reports_missing_memory_without_initializing_it(
+def test_installed_doctor_reports_optional_memory_without_failing_base_inventory(
     installed_wheel: Path, tmp_path: Path,
 ) -> None:
     result = _offline_cli(installed_wheel, tmp_path, ["doctor"], missing="chromadb")
 
-    assert result.returncode == 1, result.stderr
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "not installed (optional)" in result.stdout
     assert "python -m pip install chromadb" in result.stdout
     assert "secondpass.db" in result.stdout
     assert "not tested" in result.stdout
@@ -164,6 +183,19 @@ def test_installed_doctor_inventory_does_not_load_repository_env(
     assert result.returncode == 0, result.stderr
     assert "Package presence only" in result.stdout
     assert canary not in result.stdout + result.stderr
+    assert not (tmp_path / "state").exists()
+
+
+@pytest.mark.parametrize("package", ["semgrep", "openai", "tavily-python"])
+def test_installed_doctor_still_fails_for_missing_required_packages(
+    installed_wheel: Path, tmp_path: Path, package: str,
+) -> None:
+    result = _offline_cli(installed_wheel, tmp_path, ["doctor"], missing=f"{package},chromadb")
+
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert f"python -m pip install {package}" in result.stdout
+    assert "not installed (optional)" in result.stdout
+    assert "Traceback" not in result.stderr
     assert not (tmp_path / "state").exists()
 
 

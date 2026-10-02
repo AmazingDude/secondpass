@@ -54,17 +54,17 @@ def doctor() -> None:
     table.add_row("SecondPass", Text(package_version))
     table.add_row("Python", Text(sys.version.split()[0]))
     table.add_row("SQLite linked runtime", Text(sqlite3.sqlite_version))
-    for label, package in (
-        ("Semgrep package", "semgrep"),
-        ("Provider SDK package", "openai"),
-        ("Lesson memory package", "chromadb"),
-        ("Web search package", "tavily-python"),
+    for label, package, required in (
+        ("Semgrep package", "semgrep", True),
+        ("Provider SDK package", "openai", True),
+        ("Lesson memory package", "chromadb", False),
+        ("Web search package", "tavily-python", True),
     ):
         try:
             observation = version(package)
         except PackageNotFoundError:
-            problems = True
-            observation = "missing"
+            problems = problems or required
+            observation = "missing" if required else "not installed (optional)"
             install_commands.append(f"python -m pip install {package}")
         table.add_row(label, Text(observation))
     state_paths = None
@@ -84,7 +84,7 @@ def doctor() -> None:
         ):
             console.print(Text(f"{label}: {path}"), soft_wrap=True)
     if install_commands:
-        console.print("Install missing packages in the same Python environment:")
+        console.print("To install listed packages in the same Python environment:")
         for command in install_commands:
             console.print(Text(command))
     console.print(

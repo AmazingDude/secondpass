@@ -53,8 +53,8 @@ One Supervisor, two workers, same schema + gate. Chroma retrieves seed lessons a
 - Python 3.10+
 - Node.js 20+ (dashboard only)
 - Git (for `--diff`)
-- Semgrep (via `requirements.txt`)
-- API keys: one of **groq** / **openai** / **gemini** / **openrouter**; **Tavily** optional
+- Semgrep (installed from the package's dependencies)
+- API keys for assisted reviews: one of **groq** / **openai** / **gemini** / **openrouter**; **Tavily** optional
 
 ---
 
@@ -70,11 +70,20 @@ python -m venv .venv
 # macOS / Linux
 source .venv/bin/activate
 
-pip install -e .
+pip install -e ".[memory]"
 cp .env.example .env
 ```
 
-(`pip install -r requirements.txt` still works if you only need the deps without the `secondpass` console script.)
+Lesson memory is optional. `pip install -e .` installs the base app without
+ChromaDB; use it for static scans or assisted reviews with `--no-memory`.
+The assisted default still requests memory: install `.[memory]` as shown above,
+or disable retrieval explicitly. Requested memory that cannot run still makes
+the review incomplete, and `search-memory` reports how to install ChromaDB.
+Existing lesson data is not removed when installing without the extra.
+
+For compatibility, `pip install -r requirements.txt` installs the app with
+memory and the console script. Run it from the repository root; dependencies
+are declared in `pyproject.toml`, not duplicated in the requirements file.
 
 ```env
 LLM_PROVIDER=groq          # groq | openai | gemini | openrouter
@@ -100,7 +109,9 @@ Run `secondpass --help` or `secondpass doctor` without credentials or network
 access. Neither command loads `.env` or initializes lesson memory. `doctor`
 lists local package versions and state paths; runtime startup, credentials and
 state writability require separate checks. It exits with status 1 for missing
-listed packages or an invalid data-directory override and prints repair steps.
+required packages or an invalid data-directory override and prints repair steps.
+Absent ChromaDB is labeled optional and does not fail this base inventory;
+that does not mean an explicitly requested lesson-memory operation will work.
 
 Primary Architecture eval numbers use **Groq** at temperature 0. OpenAI can disagree on neighboring Architecture labels for the same bug. See [`benchmark/REPORT.md`](benchmark/REPORT.md) §4.
 
