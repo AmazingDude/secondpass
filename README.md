@@ -189,6 +189,28 @@ API default: `http://127.0.0.1:8000`. Interactive OpenAPI docs: [`http://127.0.0
 
 Views: **Submit**, **Findings**, **History**, **Memory**. After a job completes, Submit keeps the live timeline/audit trail; open Findings when ready. History shows **Incomplete** when coverage failed, not **Clean**. Directory submit supports `workers` / `max-files` / include-exclude (same as CLI).
 
+Saved run lookup (local API): `GET /v1/runs` groups SQLite review records by
+their recorded `job_id`; `GET /v1/runs/{job_id}` returns the group's worker
+reviews with their original numeric review IDs. Both work without a live job
+in memory. These are **legacy result projections**, not durable execution:
+run lifecycle and overall coverage are unknown, even when a recorded worker
+has `coverage_status=ok`. Missing request options, origin, snapshots and run
+start/end times are not reconstructed. Worker findings, incomplete/unverified
+signals and linked human decisions remain available through existing routes.
+
+Both endpoints return `schema_version=1`, accept `limit` (1–100, default 50),
+and return `snapshot_review_id` plus `next_before_review_id`. For the next page,
+send the same snapshot as `snapshot_review_id` and the returned next ID as
+`before_review_id`; stop when the next ID is null. Run groups are ordered by
+their newest saved review ID, and detail records by review ID, both descending.
+The snapshot freezes appended review records for that traversal, not source
+content or execution state. Refresh without a snapshot to see newer records.
+Records without a nonempty job ID remain individual reviews; audit-only jobs
+have no result group. Exact lookup returns 404 when no linked reviews exist.
+The current `/reviews/jobs/{job_id}` endpoint still describes live in-memory
+jobs and does not recover lifecycle after restart. No dashboard run browser,
+job resumption or hosted authentication is included; keep the API local.
+
 ---
 
 ## Docs map
