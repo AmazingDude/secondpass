@@ -669,6 +669,11 @@ def review(
             "Single-file reviews always show traces (this flag is unused there)."
         ),
     ),
+    memory_enabled: bool = typer.Option(
+        True,
+        "--memory/--no-memory",
+        help="Enable lesson retrieval (default). --no-memory skips store initialization and retrieval.",
+    ),
 ) -> None:
     """Run the full secondpass agent review and display a structured report."""
     if diff and path is not None:
@@ -727,6 +732,7 @@ def review(
                     selection.files,
                     mode=selection.mode,
                     on_stage=on_stage,
+                    memory_enabled=memory_enabled,
                 )
         elif path is not None and path.is_dir():
             selection = select_python_files(
@@ -763,7 +769,7 @@ def review(
             def _review_one(path_str: str) -> dict[str, Any]:
                 label = Path(path_str).name if verbose and workers > 1 else None
                 with live_stderr_scope(enabled=verbose, file_label=label):
-                    return supervise_review(path_str)
+                    return supervise_review(path_str, memory_enabled=memory_enabled)
 
             if not verbose:
                 console.print(
@@ -787,7 +793,9 @@ def review(
                 "stage progress below; tool traces go to stderr.[/dim]\n"
             )
             with ReviewProgress(console) as on_stage:
-                combined_report = supervise_review(str(path), on_stage=on_stage)
+                combined_report = supervise_review(
+                    str(path), on_stage=on_stage, memory_enabled=memory_enabled,
+                )
     except (GitDiffError, ValueError, RuntimeError) as exc:
         console.print(f"[bold red]Error:[/bold red] {exc}", highlight=False)
         raise typer.Exit(code=1) from exc

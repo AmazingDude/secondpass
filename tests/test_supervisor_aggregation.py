@@ -111,7 +111,7 @@ def test_supervise_review_aggregates_stubbed_workers(
 
     monkeypatch.setattr(
         "app.agent.review_code",
-        lambda path, max_iterations=6, on_stage=None: _worker_report(
+        lambda path, max_iterations=6, on_stage=None, memory_enabled=True: _worker_report(
             path=path,
             worker_name="security",
             accepted=1,
@@ -148,7 +148,7 @@ def test_supervise_review_can_skip_architecture(
 
     monkeypatch.setattr(
         "app.agent.review_code",
-        lambda path, max_iterations=6, on_stage=None: _worker_report(
+        lambda path, max_iterations=6, on_stage=None, memory_enabled=True: _worker_report(
             path=path,
             worker_name="security",
             accepted=0,

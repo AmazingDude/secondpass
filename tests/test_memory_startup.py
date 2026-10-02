@@ -11,6 +11,7 @@ import pytest
 
 from app.agent import review_code
 from app.persistence import list_reviews
+from app.scanner import ScanError
 from app.supervisor import supervise_review
 
 
@@ -114,3 +115,76 @@ def test_memory_startup_failure_is_inconclusive_in_saved_empty_review(
     assert len(reviews) == 1
     assert reviews[0].review_result.coverage_status == "inconclusive"
     assert unavailable_memory not in json.dumps(combined)
+
+
+def test_disabled_memory_preserves_findings_without_initializing_store(
+    monkeypatch, tmp_path: Path, unavailable_memory,
+) -> None:
+    target = tmp_path / "notes.py"
+    target.write_text(
+        "NOTES = {}\n\ndef get_note(note_id, user_id):\n    return NOTES.get(note_id)\n",
+        encoding="utf-8",
+    )
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [])
+    chat = partial(_chat, route_memory=True, logic_issue=True)
+    monkeypatch.setattr("app.agent.chat", chat)
+    monkeypatch.setattr("app.supervisor.chat", chat)
+
+    report = review_code(str(target), memory_enabled=False)
+
+    assert report["finding_count"] == 1
+    assert report["inconclusive"] is False
+    assert report["review_result"]["coverage_status"] == "ok"
+    finding = report["all_findings"][0]
+    assert finding["structured_finding"]["finding_type"] == "missing_ownership_check"
+    assert finding["routing"]["use_memory"] is False
+    assert finding["memory_worker"]["disabled"] is True
+    assert not finding["memory_worker"].get("unavailable")
+    assert not (tmp_path / "memory").exists()
+
+
+def test_disabled_memory_allows_complete_saved_empty_review(
+    monkeypatch, tmp_path: Path, unavailable_memory,
+) -> None:
+    target = tmp_path / "clean.py"
+    target.write_text("def greet():\n    return 'hello'\n", encoding="utf-8")
+    monkeypatch.setattr("app.persistence.DEFAULT_DB_PATH", tmp_path / "reviews.db")
+    monkeypatch.setattr("app.agent.run_static_scan", lambda paths: [])
+    monkeypatch.setattr("app.agent.chat", _chat)
+
+    combined = supervise_review(str(target), run_architecture=False, memory_enabled=False)
+
+    assert combined["summary"]["finding_count"] == 0
+    assert combined["summary"]["inconclusive"] is False
+    assert combined["summary"]["no_issues"] is True
+    assert list_reviews()[0].review_result.coverage_status == "ok"
+    assert not (tmp_path / "memory").exists()
+
+
+@pytest.mark.parametrize("failure", ["scanner", "model"])
+def test_disabled_memory_does_not_hide_incomplete_detectors(
+    monkeypatch, tmp_path: Path, unavailable_memory, failure: str,
+) -> None:
+    target = tmp_path / "clean.py"
+    target.write_text("def greet():\n    return 'hello'\n", encoding="utf-8")
+    monkeypatch.setattr("app.persistence.DEFAULT_DB_PATH", tmp_path / "reviews.db")
+
+    def scan(paths):
+        if failure == "scanner":
+            raise ScanError("Static scan unavailable")
+        return []
+
+    monkeypatch.setattr("app.agent.run_static_scan", scan)
+    monkeypatch.setattr(
+        "app.agent.chat",
+        _chat if failure == "scanner" else lambda *args, **kwargs: SimpleNamespace(
+            choices=[SimpleNamespace(message=SimpleNamespace(content="not valid JSON"))],
+        ),
+    )
+
+    combined = supervise_review(str(target), run_architecture=False, memory_enabled=False)
+
+    assert combined["summary"]["inconclusive"] is True
+    assert combined["summary"]["no_issues"] is False
+    assert list_reviews()[0].review_result.coverage_status == "inconclusive"
+    assert not (tmp_path / "memory").exists()

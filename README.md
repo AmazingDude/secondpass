@@ -129,6 +129,15 @@ secondpass search-web "OWASP broken access control A01"
 
 Use either `review <path>` **or** `review --diff`, not both. For directories, `--workers` is concurrent **file** reviews; Security and Architecture still both run per file.
 
+Lesson retrieval is enabled by default. Add `--no-memory` to file, directory or
+diff reviews to skip lesson-store initialization and retrieval, including its
+embedding startup/downloads. For example, run `secondpass review path/to/file.py --no-memory`.
+This is not an offline mode: scanners, model review and optional
+web research still use their existing configuration. Disabling retrieval is not
+a coverage failure; requesting it when the store cannot initialize still makes
+the review inconclusive. Explicit searches and human decision/promotion commands
+are separate actions and are not disabled by this per-review option.
+
 ---
 
 ## API + dashboard

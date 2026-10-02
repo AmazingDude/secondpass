@@ -93,7 +93,7 @@ def test_static_finding_does_not_suppress_logic_review(monkeypatch, tmp_path: Pa
     monkeypatch.setattr("app.agent.assess_logic_review", _assess)
     monkeypatch.setattr(
         "app.agent._review_finding",
-        lambda finding, max_iterations=6, memory_available=True: _reviewed(finding),
+        lambda finding, max_iterations=6, memory_available=True, memory_enabled=True: _reviewed(finding),
     )
 
     report = review_code(str(target))
