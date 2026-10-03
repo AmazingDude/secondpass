@@ -25,6 +25,14 @@ DEFAULT_DB_PATH = DEFAULT_STATE_PATHS.review_db
 _DB_INIT_LOCK = threading.RLock()
 _SQLITE_TIMEOUT_SECONDS = 30.0
 
+_JOB_SCHEMA_SQL = """
+CREATE TABLE IF NOT EXISTS review_jobs (
+    sequence INTEGER PRIMARY KEY AUTOINCREMENT,
+    job_id TEXT NOT NULL UNIQUE,
+    record_json TEXT NOT NULL
+);
+"""
+
 _SCHEMA_SQL = """
 CREATE TABLE IF NOT EXISTS reviews (
     id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -60,11 +68,6 @@ CREATE TABLE IF NOT EXISTS audit_events (
     detail_json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS review_jobs (
-    job_id TEXT PRIMARY KEY,
-    record_json TEXT NOT NULL
-);
-
 CREATE INDEX IF NOT EXISTS idx_reviews_file_path
     ON reviews(file_path);
 
@@ -73,7 +76,7 @@ CREATE INDEX IF NOT EXISTS idx_outcomes_file_path
 
 CREATE INDEX IF NOT EXISTS idx_audit_events_job_id
     ON audit_events(job_id, id);
-"""
+""" + _JOB_SCHEMA_SQL
 # NOTE: idx_reviews_job_id is created in _migrate_schema AFTER ensuring the
 # job_id column exists. Putting it in executescript breaks older DBs where
 # CREATE TABLE IF NOT EXISTS leaves a pre-job_id reviews table in place.
@@ -103,6 +106,24 @@ class StoredJob(BaseModel):
     result: dict[str, Any] | None = None
     created_at: datetime
     updated_at: datetime
+
+
+class JobSummary(BaseModel):
+    """Discovery metadata only; execution completion is not analysis coverage."""
+
+    job_id: str
+    path: str
+    execution_status: Literal["queued", "running", "completed", "failed", "interrupted"]
+    coverage_status: Literal["unknown"] = "unknown"
+    created_at: datetime
+    updated_at: datetime
+
+
+class JobPage(BaseModel):
+    schema_version: Literal[1] = 1
+    jobs: list[JobSummary]
+    snapshot_sequence: int = Field(ge=0)
+    next_before_sequence: int | None = Field(default=None, ge=1)
 
 
 class LegacyRun(BaseModel):
@@ -242,6 +263,17 @@ def _row_to_outcome(row: sqlite3.Row) -> StoredVerifiedOutcome:
 
 def _migrate_schema(conn: sqlite3.Connection) -> None:
     """Additive migrations for DBs created before newer columns/tables."""
+    job_columns = {row[1] for row in conn.execute("PRAGMA table_info(review_jobs)")}
+    if "sequence" not in job_columns:
+        # Preserve JSON verbatim. A stable insertion ID is independent of status
+        # updates and cannot be reused after future deletion of a newer record.
+        conn.execute("ALTER TABLE review_jobs RENAME TO previous_review_jobs")
+        conn.execute(_JOB_SCHEMA_SQL)
+        conn.execute(
+            "INSERT INTO review_jobs (job_id, record_json) "
+            "SELECT job_id, record_json FROM previous_review_jobs ORDER BY rowid"
+        )
+        conn.execute("DROP TABLE previous_review_jobs")
     review_cols = {
         row[1] for row in conn.execute("PRAGMA table_info(reviews)").fetchall()
     }
@@ -320,6 +352,34 @@ def get_job(
             "SELECT record_json FROM review_jobs WHERE job_id = ?", (job_id,),
         ).fetchone()
     return StoredJob.model_validate_json(row["record_json"]) if row else None
+
+
+def list_job_ids(
+    *, limit: int = 50, snapshot_sequence: int | None = None,
+    before_sequence: int | None = None, db_path: Path | str | None = None,
+) -> tuple[list[str], int, int | None]:
+    """Bounded membership snapshot, ordered by original request insertion."""
+    if not 1 <= limit <= 100:
+        raise InvalidHistoryWindowError("History limit must be between 1 and 100")
+    for value, minimum in ((snapshot_sequence, 0), (before_sequence, 1)):
+        if value is not None and not minimum <= value <= 2**63 - 1:
+            raise InvalidHistoryWindowError("History job sequence is out of range")
+    init_db(db_path)
+    with _connection(db_path) as conn:
+        conn.execute("BEGIN")
+        maximum = conn.execute("SELECT COALESCE(MAX(sequence), 0) FROM review_jobs").fetchone()[0]
+        if snapshot_sequence is not None and snapshot_sequence > maximum:
+            raise InvalidHistoryWindowError("History snapshot exceeds saved job records")
+        snapshot = maximum if snapshot_sequence is None else snapshot_sequence
+        rows = conn.execute(
+            "SELECT job_id, sequence FROM review_jobs "
+            "WHERE sequence <= ? AND sequence < ? ORDER BY sequence DESC LIMIT ?",
+            (snapshot, before_sequence if before_sequence is not None else 2**63 - 1, limit + 1),
+        ).fetchall()
+    return (
+        [row["job_id"] for row in rows[:limit]], snapshot,
+        rows[limit - 1]["sequence"] if len(rows) > limit else None,
+    )
 
 
 def save_review(

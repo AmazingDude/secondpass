@@ -19,6 +19,7 @@ from app.multifile import select_python_files
 from app.persistence import (
     DEFAULT_DB_PATH,
     InvalidHistoryWindowError,
+    JobPage,
     LegacyRunDetail,
     LegacyRunPage,
     get_review,
@@ -113,6 +114,18 @@ def health() -> dict[str, str]:
 @app.exception_handler(JobSubmissionError)
 def job_submission_error_handler(_request: Request, exc: JobSubmissionError) -> JSONResponse:
     return JSONResponse(status_code=503, content={"detail": str(exc)})
+
+
+@app.get("/v1/jobs", response_model=JobPage)
+def list_durable_jobs(
+    limit: int = Query(50, ge=1, le=100),
+    snapshot_sequence: int | None = Query(None, ge=0, le=2**63 - 1),
+    before_sequence: int | None = Query(None, ge=1, le=2**63 - 1),
+) -> JobPage:
+    """Discover durable requests; status is live, page membership is fixed."""
+    return job_store.list(
+        limit=limit, snapshot_sequence=snapshot_sequence, before_sequence=before_sequence,
+    )
 
 
 @app.get("/v1/runs", response_model=LegacyRunPage)
