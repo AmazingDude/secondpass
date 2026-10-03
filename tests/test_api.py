@@ -17,6 +17,11 @@ from app.persistence import save_review
 from app.schema import Finding, ReviewResult
 
 
+class _UnformattableFailure(Exception):
+    def __str__(self) -> str:
+        raise AssertionError("Exceptions must not be formatted for job responses")
+
+
 @pytest.fixture()
 def client(tmp_path: Path, monkeypatch: pytest.MonkeyPatch) -> TestClient:
     db_path = tmp_path / "api.db"
@@ -119,6 +124,7 @@ def test_submit_poll_completed_shape(client: TestClient, tmp_path: Path, monkeyp
 
     assert final is not None
     assert final["status"] == "completed"
+    assert final["error"] is None
     assert final["persisted_review_ids"]["security"] is not None
     assert final["summary"]["accepted_count"] == 1
 
@@ -213,6 +219,66 @@ def test_accept_reject_outcome_via_api(
 def test_submit_missing_path_returns_400(client: TestClient) -> None:
     response = client.post("/reviews", json={"path": "does/not/exist.py"})
     assert response.status_code == 400
+
+
+@pytest.mark.parametrize("failure", [
+    RuntimeError("FAKE-SECRET-job-failure: provider request and private source text"),
+    type("FAKE-SECRET-job-failure", (Exception,), {})("private exception name"),
+    _UnformattableFailure("FAKE-SECRET-job-failure"),
+], ids=["message", "exception-name", "unformattable"])
+def test_failed_job_uses_a_safe_message_and_keeps_saved_worker_results(
+    client: TestClient, tmp_path: Path, failure: Exception,
+) -> None:
+    from app import api
+    from app.persistence import save_audit_event
+
+    canary = "FAKE-SECRET-job-failure"
+    target = tmp_path / "review.py"
+    target.write_text("VALUE = 1\n", encoding="utf-8")
+    saved_ids: list[int] = []
+
+    def failing_runner(path: str, *, job_id: str) -> dict:
+        result = ReviewResult(
+            findings=[Finding(
+                finding_type="command_injection", evidence="shell=True executes input",
+                confidence=90, suggested_fix="Use a shell-free argument list",
+                detection_method="static_rule",
+            )],
+            file_path=path, worker_name="security",
+            timestamp=datetime.now(timezone.utc), coverage_status="inconclusive",
+        )
+        stored = save_review(result, apply_confidence_gate(result), job_id=job_id)
+        saved_ids.append(stored.id)
+        save_audit_event(job_id, "review_persisted", detail={"review_id": stored.id})
+        raise failure
+
+    # Inject through the runner's public interface; use real SQLite storage.
+    api.job_store.set_runner(failing_runner)
+    submitted = client.post("/reviews", json={"path": str(target)})
+    assert submitted.status_code == 202
+    job_id = submitted.json()["job_id"]
+    for _ in range(50):
+        response = client.get(f"/reviews/jobs/{job_id}")
+        body = response.json()
+        if body["status"] in {"completed", "failed"}:
+            break
+        time.sleep(0.05)
+    else:
+        pytest.fail("job did not reach a terminal state")
+
+    assert body["status"] == "failed"
+    assert canary not in response.text
+    assert body["error"] == "Review failed. Check your setup and retry."
+    assert "result" not in body
+    assert "summary" not in body
+    stored = client.get(f"/reviews/{saved_ids[0]}")
+    assert stored.status_code == 200
+    assert stored.json()["review_result"]["coverage_status"] == "inconclusive"
+    assert stored.json()["review_result"]["findings"][0]["finding_type"] == "command_injection"
+    audit = client.get(f"/reviews/jobs/{job_id}/audit")
+    assert audit.status_code == 200
+    assert audit.json()["events"][0]["detail"]["review_id"] == saved_ids[0]
+    assert canary not in audit.text
 
 
 def test_preview_directory_reuses_deterministic_selection(
