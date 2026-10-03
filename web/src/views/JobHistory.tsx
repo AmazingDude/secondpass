@@ -3,6 +3,7 @@ import {
   getJob, getSavedRun, listJobs,
   type JobPage, type JobPayload, type JobSummary, type ReviewPayload, type SavedRunDetail,
 } from "../api";
+import { jobLink } from "../navigation";
 
 type Props = { onOpenReview: (review: ReviewPayload) => void };
 
@@ -10,7 +11,7 @@ function statusLabel(status: JobSummary["execution_status"]) {
   return status[0].toUpperCase() + status.slice(1);
 }
 
-function JobDetail({ jobId, onBack, onOpenReview }: Props & { jobId: string; onBack: () => void }) {
+function JobDetail({ jobId, onOpenReview }: Props & { jobId: string }) {
   const [job, setJob] = useState<JobPayload | null>(null);
   const [detail, setDetail] = useState<SavedRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -40,7 +41,7 @@ function JobDetail({ jobId, onBack, onOpenReview }: Props & { jobId: string; onB
   }
 
   return <div className="card">
-    <button className="btn btn-ghost" type="button" onClick={onBack}>Back to jobs</button>
+    <a className="btn btn-ghost" href="#/history">Back to jobs</a>
     <h2>Job <span className="mono">{jobId}</span></h2>
     {job ? <>
       <p className="mono">{job.path}</p>
@@ -64,14 +65,14 @@ function JobDetail({ jobId, onBack, onOpenReview }: Props & { jobId: string; onB
   </div>;
 }
 
-export function JobHistory({ onOpenReview }: Props) {
+export function JobHistory({ onOpenReview, jobId }: Props & { jobId?: string }) {
   const [refresh, setRefresh] = useState(0);
   const [page, setPage] = useState<JobPage | null>(null);
-  const [selected, setSelected] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (jobId) return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -79,7 +80,7 @@ export function JobHistory({ onOpenReview }: Props) {
       .catch((err: unknown) => { if (!cancelled) setError(err instanceof Error ? err.message : String(err)); })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
-  }, [refresh]);
+  }, [refresh, jobId]);
 
   async function loadMore() {
     if (!page || page.next_before_sequence === null) return;
@@ -93,10 +94,7 @@ export function JobHistory({ onOpenReview }: Props) {
     } finally { setLoading(false); }
   }
 
-  if (selected) return <JobDetail key={selected} jobId={selected} onBack={() => {
-    setSelected(null);
-    setRefresh(value => value + 1);
-  }} onOpenReview={onOpenReview} />;
+  if (jobId) return <JobDetail key={jobId} jobId={jobId} onOpenReview={onOpenReview} />;
   return <>
     <p className="empty-detail">Newest recorded requests first. Execution status is separate from analysis coverage.</p>
     <button type="button" className="btn btn-ghost" disabled={loading} onClick={() => setRefresh(value => value + 1)}>Refresh jobs</button>
@@ -110,7 +108,7 @@ export function JobHistory({ onOpenReview }: Props) {
         <td>{new Date(job.created_at).toLocaleString()}</td>
         <td className="mono">{job.path}</td>
         <td>{statusLabel(job.execution_status)}</td><td>Unknown</td>
-        <td><button type="button" className="btn btn-ghost" disabled={loading} onClick={() => setSelected(job.job_id)}>Open job {job.job_id}</button></td>
+        <td><a className="btn btn-ghost" href={jobLink(job.job_id)}>Open job {job.job_id}</a></td>
       </tr>)}</tbody>
     </table></div> : null}
     {page?.next_before_sequence != null ?

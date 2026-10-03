@@ -225,6 +225,14 @@ Open a job to inspect its saved status and paginated worker results; this is
 not live monitoring. Older individual worker reviews remain accessible in
 the compatibility view (up to 200 rows). Legacy run endpoints are unchanged.
 
+Job links use `#/history/jobs/<encoded_job_id>`; the job list is `#/history`
+and older worker reviews are `#/history/workers`. Opening or reloading a job
+link retrieves that recorded job, and browser back/forward restores the view.
+Hash links work on static hosting without server rewrite rules. They are local
+navigation links, not public share links or an authorization mechanism.
+The Findings payload is still transient: reload its tab and reopen the saved
+review from its job or worker history. Live monitoring is unchanged.
+
 Use a local SQLite database on a filesystem supporting native file locking;
 unsupported locking fails submission rather than silently using marker files.
 Do not delete the database's adjacent `.job-locks` directory while any executor

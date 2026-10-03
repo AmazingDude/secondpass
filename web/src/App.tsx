@@ -1,23 +1,13 @@
-import { useCallback, useState } from "react";
+import { useCallback, useRef, useState } from "react";
 import { API_BASE, getReview } from "./api";
 import type { JobPayload, ReviewPayload } from "./api";
 import { FindingsView } from "./views/FindingsView";
 import { HistoryView } from "./views/HistoryView";
 import { MemoryView } from "./views/MemoryView";
 import { SubmitReview } from "./views/SubmitReview";
+import { navigate, useDashboardRoute } from "./navigation";
 
 type Tab = "submit" | "findings" | "history" | "memory";
-
-type Screen =
-  | { name: "submit" }
-  | {
-      name: "findings";
-      reviews: ReviewPayload[];
-      jobPath?: string;
-      backTo: "submit" | "history";
-    }
-  | { name: "history" }
-  | { name: "memory"; initialReviewId?: number | null };
 
 const DEMO_PATH = "benchmark/fixtures/notes_idor.py";
 
@@ -37,11 +27,13 @@ function apiHostLabel(base: string) {
 }
 
 export default function App() {
-  const [screen, setScreen] = useState<Screen>({ name: "submit" });
+  const screen = useDashboardRoute();
+  const findingsGeneration = useRef(0);
   const [lastFindings, setLastFindings] = useState<{
     reviews: ReviewPayload[];
     jobPath?: string;
     backTo: "submit" | "history";
+    backLink: string;
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -51,14 +43,17 @@ export default function App() {
       jobPath?: string,
       backTo: "submit" | "history" = "history",
     ) => {
-      const next = { reviews, jobPath, backTo };
+      findingsGeneration.current += 1;
+      const backLink = backTo === "history" ? window.location.hash : "#/submit";
+      const next = { reviews, jobPath, backTo, backLink };
       setLastFindings(next);
-      setScreen({ name: "findings", ...next });
+      navigate("#/findings");
     },
     [],
   );
 
   const handleCompleted = useCallback(async (job: JobPayload) => {
+    const generation = ++findingsGeneration.current;
     setLoadError(null);
     const ids = job.persisted_review_ids || {};
     const reviewIds = (
@@ -66,42 +61,26 @@ export default function App() {
     ).filter((id): id is number => typeof id === "number");
     try {
       const reviews = await Promise.all(reviewIds.map((id) => getReview(id)));
+      if (generation !== findingsGeneration.current) return;
       // Stay on Submit so the live timeline/audit trail remain visible;
       // Findings opens only when the user chooses.
-      setLastFindings({ reviews, jobPath: job.path, backTo: "submit" });
+      setLastFindings({ reviews, jobPath: job.path, backTo: "submit", backLink: "#/submit" });
     } catch (err) {
-      setLoadError(err instanceof Error ? err.message : String(err));
+      if (generation === findingsGeneration.current) {
+        setLoadError(err instanceof Error ? err.message : String(err));
+      }
     }
   }, []);
 
   function goTab(tab: Tab) {
     setLoadError(null);
-    if (tab === "submit") {
-      setScreen({ name: "submit" });
-      return;
-    }
-    if (tab === "history") {
-      setScreen({ name: "history" });
-      return;
-    }
-    if (tab === "memory") {
-      setScreen({
-        name: "memory",
-        initialReviewId: lastFindings?.reviews[0]?.id ?? null,
-      });
-      return;
-    }
-    if (lastFindings) {
-      setScreen({ name: "findings", ...lastFindings });
-    } else {
-      setScreen({ name: "findings", reviews: [], backTo: "history" });
-    }
+    navigate(`#/${tab}`);
   }
 
   const activeTab: Tab =
     screen.name === "findings"
       ? "findings"
-      : screen.name === "history"
+      : screen.name === "history" || screen.name === "invalid"
         ? "history"
         : screen.name === "memory"
           ? "memory"
@@ -164,15 +143,17 @@ export default function App() {
 
           {screen.name === "findings" ? (
             <FindingsView
-              reviews={screen.reviews}
-              jobPath={screen.jobPath}
-              onBack={() => goTab(screen.backTo)}
-              backLabel={screen.backTo === "submit" ? "Submit" : "History"}
+              reviews={lastFindings?.reviews ?? []}
+              jobPath={lastFindings?.jobPath}
+              onBack={() => navigate(lastFindings?.backLink || "#/history")}
+              backLabel={lastFindings?.backTo === "submit" ? "Submit" : "History"}
             />
           ) : null}
 
           {screen.name === "history" ? (
             <HistoryView
+              view={screen.view}
+              jobId={screen.jobId}
               onOpenReview={(review) => {
                 openFindings([review], review.file_path, "history");
               }}
@@ -180,8 +161,12 @@ export default function App() {
           ) : null}
 
           {screen.name === "memory" ? (
-            <MemoryView initialReviewId={screen.initialReviewId} />
+            <MemoryView initialReviewId={lastFindings?.reviews[0]?.id ?? null} />
           ) : null}
+          {screen.name === "invalid" ? <div className="card">
+            <p className="error-text" role="alert">Invalid dashboard link. Open History to find a saved job.</p>
+            <a className="btn btn-ghost" href="#/history">Open History</a>
+          </div> : null}
         </div>
       </div>
     </div>
