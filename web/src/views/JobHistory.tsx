@@ -1,17 +1,15 @@
 import { useEffect, useState } from "react";
 import {
   getJob, getSavedRun, listJobs,
-  type JobPage, type JobPayload, type JobSummary, type ReviewPayload, type SavedRunDetail,
+  type JobPage, type JobPayload, type JobSummary, type SavedRunDetail,
 } from "../api";
-import { jobLink } from "../navigation";
-
-type Props = { onOpenReview: (review: ReviewPayload) => void };
+import { jobLink, reviewLink } from "../navigation";
 
 function statusLabel(status: JobSummary["execution_status"]) {
   return status[0].toUpperCase() + status.slice(1);
 }
 
-function JobDetail({ jobId, onOpenReview }: Props & { jobId: string }) {
+function JobDetail({ jobId }: { jobId: string }) {
   const [job, setJob] = useState<JobPayload | null>(null);
   const [detail, setDetail] = useState<SavedRunDetail | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,9 +52,9 @@ function JobDetail({ jobId, onOpenReview }: Props & { jobId: string }) {
     {!loading && !error && !detail?.reviews.length ?
       <p className="empty-detail">No saved worker results. This does not mean the analysis was clean.</p> : null}
     {detail?.reviews.map(review => <p key={review.id}>
-      <button type="button" className="btn btn-ghost" onClick={() => onOpenReview(review)}>
+      <a className="btn btn-ghost" href={reviewLink(review.id)}>
         Open saved review {review.id} · {review.worker_name} · {review.file_path}
-      </button>
+      </a>
     </p>)}
     {detail?.next_before_review_id != null ?
       <button type="button" className="btn btn-ghost" disabled={loading} onClick={() => void loadMore()}>
@@ -65,7 +63,7 @@ function JobDetail({ jobId, onOpenReview }: Props & { jobId: string }) {
   </div>;
 }
 
-export function JobHistory({ onOpenReview, jobId }: Props & { jobId?: string }) {
+export function JobHistory({ jobId }: { jobId?: string }) {
   const [refresh, setRefresh] = useState(0);
   const [page, setPage] = useState<JobPage | null>(null);
   const [loading, setLoading] = useState(true);
@@ -94,7 +92,7 @@ export function JobHistory({ onOpenReview, jobId }: Props & { jobId?: string }) 
     } finally { setLoading(false); }
   }
 
-  if (jobId) return <JobDetail key={jobId} jobId={jobId} onOpenReview={onOpenReview} />;
+  if (jobId) return <JobDetail key={jobId} jobId={jobId} />;
   return <>
     <p className="empty-detail">Newest recorded requests first. Execution status is separate from analysis coverage.</p>
     <button type="button" className="btn btn-ghost" disabled={loading} onClick={() => setRefresh(value => value + 1)}>Refresh jobs</button>
