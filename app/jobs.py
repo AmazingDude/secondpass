@@ -13,7 +13,7 @@ from typing import Any, Callable, Literal
 
 from filelock import FileLock, Timeout
 
-from app.persistence import StoredJob, get_job, init_db, save_job
+from app.persistence import JobPage, JobSummary, StoredJob, get_job, init_db, list_job_ids, save_job
 
 JobStatus = Literal["queued", "running", "completed", "failed", "interrupted"]
 
@@ -228,6 +228,26 @@ class JobStore:
                 created_at=job.created_at,
                 updated_at=job.updated_at,
             )
+
+    def list(
+        self, *, limit: int = 50, snapshot_sequence: int | None = None,
+        before_sequence: int | None = None,
+    ) -> JobPage:
+        ids, snapshot, before = list_job_ids(
+            limit=limit, snapshot_sequence=snapshot_sequence,
+            before_sequence=before_sequence, db_path=self._db_path,
+        )
+        summaries = []
+        for job_id in ids:
+            # Share the ownership-aware lookup: a saved active status alone
+            # cannot prove that its executor is still alive.
+            job = self.get(job_id)
+            if job is not None:
+                summaries.append(JobSummary(
+                    job_id=job.job_id, path=job.path, execution_status=job.status,
+                    created_at=job.created_at, updated_at=job.updated_at,
+                ))
+        return JobPage(jobs=summaries, snapshot_sequence=snapshot, next_before_sequence=before)
 
     def _update(
         self,

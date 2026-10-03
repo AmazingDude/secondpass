@@ -214,6 +214,17 @@ lock for each job. Lookup marks abandoned queued/running work **interrupted**,
 never reruns it, and leaves saved worker findings available through History.
 The dashboard stops polling interrupted jobs and displays a warning.
 
+History now opens a paginated **Jobs** view, including requests with no saved
+worker results. `GET /v1/jobs` returns metadata only, with execution status and
+explicitly unknown overall analysis coverage. It accepts `limit` (1–100,
+default 50), `snapshot_sequence` and `before_sequence`; pass the returned
+`snapshot_sequence` and `next_before_sequence` to continue, stopping at null.
+Jobs are ordered by recorded request insertion, newest first. The snapshot
+fixes membership/order, not execution status. Refresh starts a new traversal.
+Open a job to inspect its saved status and paginated worker results; this is
+not live monitoring. Older individual worker reviews remain accessible in
+the compatibility view (up to 200 rows). Legacy run endpoints are unchanged.
+
 Use a local SQLite database on a filesystem supporting native file locking;
 unsupported locking fails submission rather than silently using marker files.
 Do not delete the database's adjacent `.job-locks` directory while any executor

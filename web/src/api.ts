@@ -108,6 +108,15 @@ function formatApiDetail(detail: unknown, fallback: string): string {
   return fallback;
 }
 
+class ApiError extends Error {
+  readonly status: number;
+
+  constructor(message: string, status: number) {
+    super(message);
+    this.status = status;
+  }
+}
+
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
   const response = await fetch(`${API_BASE}${path}`, {
     ...init,
@@ -124,7 +133,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
     } catch {
       /* ignore */
     }
-    throw new Error(detail);
+    throw new ApiError(detail, response.status);
   }
   return (await response.json()) as T;
 }
@@ -189,6 +198,47 @@ export function listReviews(limit = 50) {
   return request<{ reviews: ReviewPayload[] }>(
     `/reviews?limit=${encodeURIComponent(String(limit))}`,
   );
+}
+
+export type JobSummary = {
+  job_id: string;
+  path: string;
+  execution_status: JobStatus;
+  coverage_status: "unknown";
+  created_at: string;
+  updated_at: string;
+};
+
+export type JobPage = {
+  schema_version: 1;
+  jobs: JobSummary[];
+  snapshot_sequence: number;
+  next_before_sequence: number | null;
+};
+
+export function listJobs(snapshot?: number, before?: number) {
+  const query = new URLSearchParams({ limit: "20" });
+  if (snapshot !== undefined) query.set("snapshot_sequence", String(snapshot));
+  if (before !== undefined) query.set("before_sequence", String(before));
+  return request<JobPage>(`/v1/jobs?${query}`);
+}
+
+export type SavedRunDetail = {
+  reviews: ReviewPayload[];
+  snapshot_review_id: number;
+  next_before_review_id: number | null;
+};
+
+export async function getSavedRun(jobId: string, snapshot?: number, before?: number) {
+  const query = new URLSearchParams({ limit: "20" });
+  if (snapshot !== undefined) query.set("snapshot_review_id", String(snapshot));
+  if (before !== undefined) query.set("before_review_id", String(before));
+  try {
+    return await request<SavedRunDetail>(`/v1/runs/${encodeURIComponent(jobId)}?${query}`);
+  } catch (error) {
+    if (error instanceof ApiError && error.status === 404) return null;
+    throw error;
+  }
 }
 
 export type OutcomePayload = {

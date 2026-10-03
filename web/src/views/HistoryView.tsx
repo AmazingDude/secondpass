@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { listReviews, type ReviewPayload } from "../api";
+import { JobHistory } from "./JobHistory";
 
 const PAGE_SIZE = 20;
 
@@ -33,12 +34,14 @@ function shortPath(path: string): string {
 }
 
 export function HistoryView({ onOpenReview }: Props) {
+  const [view, setView] = useState<"jobs" | "workers">("jobs");
   const [reviews, setReviews] = useState<ReviewPayload[]>([]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    if (view !== "workers") return;
     let cancelled = false;
     setLoading(true);
     setError(null);
@@ -58,7 +61,7 @@ export function HistoryView({ onOpenReview }: Props) {
     return () => {
       cancelled = true;
     };
-  }, []);
+  }, [view]);
 
   const visible = useMemo(
     () => reviews.slice(0, visibleCount),
@@ -66,10 +69,19 @@ export function HistoryView({ onOpenReview }: Props) {
   );
   const hasMore = visibleCount < reviews.length;
 
+  if (view === "jobs") return <div>
+    <p className="app-eyebrow">History</p>
+    <h1 className="app-title">Previous jobs</h1>
+    <JobHistory onOpenReview={onOpenReview} />
+    <button type="button" className="btn btn-ghost" onClick={() => setView("workers")}>Older worker reviews</button>
+  </div>;
+
   return (
     <div>
       <p className="app-eyebrow">History</p>
       <h1 className="app-title">Previous reviews</h1>
+      <button type="button" className="btn btn-ghost" onClick={() => setView("jobs")}>Back to jobs</button>
+      <p className="empty-detail">Compatibility view: up to 200 individual saved worker reviews, not execution history.</p>
 
       {loading ? (
         <p className="empty-detail">
