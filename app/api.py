@@ -1,7 +1,7 @@
 """Lightweight FastAPI backend: submit → poll job → fetch reviews / outcomes.
 
-No auth. In-memory job store resets on process restart; completed ReviewResult
-rows live in SQLite via the same persist path as the CLI.
+No auth. Active execution is in-process; terminal job responses and worker
+ReviewResult rows live in SQLite. Restart does not resume active reviews.
 """
 
 from __future__ import annotations

@@ -1,4 +1,4 @@
-"""In-memory async review job store (resets on process restart — fine for v1)."""
+"""In-process execution with durable terminal-job lookup in local SQLite."""
 
 from __future__ import annotations
 
@@ -9,6 +9,8 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
+
+from app.persistence import StoredTerminalJob, get_terminal_job, save_terminal_job
 
 JobStatus = Literal["queued", "running", "completed", "failed"]
 
@@ -44,18 +46,20 @@ class ReviewJob:
 
 
 class JobStore:
-    """Thread-safe in-memory jobs + ThreadPoolExecutor for blocking reviews."""
+    """Live jobs plus saved terminal responses; historical lookup never replays."""
 
     def __init__(
         self,
         *,
         max_workers: int = 2,
         runner: ReviewRunner | None = None,
+        db_path: Path | str | None = None,
     ) -> None:
         self._jobs: dict[str, ReviewJob] = {}
         self._lock = threading.Lock()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._runner = runner or self._default_runner
+        self._db_path = db_path
 
     @staticmethod
     def _default_runner(
@@ -140,7 +144,8 @@ class JobStore:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
-                return None
+                saved = get_terminal_job(job_id, db_path=self._db_path)
+                return ReviewJob(**saved.model_dump()) if saved is not None else None
             # Return a shallow snapshot so callers don't mutate internal state.
             return ReviewJob(
                 job_id=job.job_id,
@@ -163,11 +168,26 @@ class JobStore:
     ) -> None:
         with self._lock:
             job = self._jobs[job_id]
+            when = datetime.now(timezone.utc)
+            if status in {"completed", "failed"}:
+                try:
+                    save_terminal_job(
+                        StoredTerminalJob(
+                            job_id=job.job_id, path=job.path, options=job.options,
+                            status=status, error=error, result=result,
+                            created_at=job.created_at, updated_at=when,
+                        ),
+                        db_path=self._db_path,
+                    )
+                except Exception:
+                    # Do not advertise durable completion when saving failed.
+                    status = "failed"
+                    error = "Could not save the job result. Check local storage and retry."
+                    result = None
             job.status = status
             job.error = error
-            if result is not None:
-                job.result = result
-            job.updated_at = datetime.now(timezone.utc)
+            job.result = result
+            job.updated_at = when
 
     def _execute(self, job_id: str) -> None:
         self._update(job_id, status="running")
@@ -207,5 +227,5 @@ class JobStore:
         self._executor.shutdown(wait=wait, cancel_futures=True)
 
 
-# Process-wide store used by the FastAPI app (resets on restart).
+# Process-wide executor; terminal responses are looked up lazily after restart.
 job_store = JobStore()

@@ -207,9 +207,13 @@ The snapshot freezes appended review records for that traversal, not source
 content or execution state. Refresh without a snapshot to see newer records.
 Records without a nonempty job ID remain individual reviews; audit-only jobs
 have no result group. Exact lookup returns 404 when no linked reviews exist.
-The current `/reviews/jobs/{job_id}` endpoint still describes live in-memory
-jobs and does not recover lifecycle after restart. No dashboard run browser,
-job resumption or hosted authentication is included; keep the API local.
+`/reviews/jobs/{job_id}` also recovers completed/failed API job responses saved
+by this version, including request options, timestamps and the final report.
+These use the same local SQLite database as worker reviews. Completion means
+execution finished, not that analysis was complete or found no issues. Legacy
+review groups are not converted into completed jobs. Active jobs remain
+in-memory and cannot be recovered after restart; lookup never resumes work.
+No dashboard run browser or hosted authentication is included; keep the API local.
 
 ---
 
