@@ -183,7 +183,7 @@ export function previewReview(path: string, options: ReviewOptions) {
 }
 
 export function getJob(jobId: string) {
-  return request<JobPayload>(`/reviews/jobs/${jobId}`);
+  return request<JobPayload>(`/reviews/jobs/${encodeURIComponent(jobId)}`);
 }
 
 export function getJobAudit(jobId: string) {

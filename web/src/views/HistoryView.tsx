@@ -6,6 +6,8 @@ const PAGE_SIZE = 20;
 
 type Props = {
   onOpenReview: (review: ReviewPayload) => void;
+  view: "jobs" | "workers";
+  jobId?: string;
 };
 
 function formatWhen(iso: string) {
@@ -33,8 +35,7 @@ function shortPath(path: string): string {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
-export function HistoryView({ onOpenReview }: Props) {
-  const [view, setView] = useState<"jobs" | "workers">("jobs");
+export function HistoryView({ onOpenReview, view, jobId }: Props) {
   const [reviews, setReviews] = useState<ReviewPayload[]>([]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
@@ -72,15 +73,15 @@ export function HistoryView({ onOpenReview }: Props) {
   if (view === "jobs") return <div>
     <p className="app-eyebrow">History</p>
     <h1 className="app-title">Previous jobs</h1>
-    <JobHistory onOpenReview={onOpenReview} />
-    <button type="button" className="btn btn-ghost" onClick={() => setView("workers")}>Older worker reviews</button>
+    <JobHistory key={jobId ?? "jobs"} jobId={jobId} onOpenReview={onOpenReview} />
+    <a className="btn btn-ghost" href="#/history/workers">Older worker reviews</a>
   </div>;
 
   return (
     <div>
       <p className="app-eyebrow">History</p>
       <h1 className="app-title">Previous reviews</h1>
-      <button type="button" className="btn btn-ghost" onClick={() => setView("jobs")}>Back to jobs</button>
+      <a className="btn btn-ghost" href="#/history">Back to jobs</a>
       <p className="empty-detail">Compatibility view: up to 200 individual saved worker reviews, not execution history.</p>
 
       {loading ? (
