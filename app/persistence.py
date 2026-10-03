@@ -60,6 +60,11 @@ CREATE TABLE IF NOT EXISTS audit_events (
     detail_json TEXT NOT NULL
 );
 
+CREATE TABLE IF NOT EXISTS terminal_jobs (
+    job_id TEXT PRIMARY KEY,
+    record_json TEXT NOT NULL
+);
+
 CREATE INDEX IF NOT EXISTS idx_reviews_file_path
     ON reviews(file_path);
 
@@ -85,6 +90,19 @@ class StoredReview(BaseModel):
     needs_review_count: int = Field(ge=0)
     gate_result: GateResult
     job_id: str | None = None
+
+
+class StoredTerminalJob(BaseModel):
+    """Final polling response metadata, separate from worker review records."""
+
+    job_id: str
+    path: str
+    options: dict[str, Any]
+    status: Literal["completed", "failed"]
+    error: str | None = None
+    result: dict[str, Any] | None = None
+    created_at: datetime
+    updated_at: datetime
 
 
 class LegacyRun(BaseModel):
@@ -264,6 +282,30 @@ def init_db(db_path: Path | str | None = None) -> Path:
             _migrate_schema(conn)
             conn.commit()
     return path
+
+
+def save_terminal_job(
+    job: StoredTerminalJob, *, db_path: Path | str | None = None,
+) -> None:
+    """Save the terminal response before publishing completion to callers."""
+    init_db(db_path)
+    with _connection(db_path) as conn:
+        conn.execute(
+            "INSERT INTO terminal_jobs (job_id, record_json) VALUES (?, ?)",
+            (job.job_id, _dump_model(job)),
+        )
+        conn.commit()
+
+
+def get_terminal_job(
+    job_id: str, *, db_path: Path | str | None = None,
+) -> StoredTerminalJob | None:
+    init_db(db_path)
+    with _connection(db_path) as conn:
+        row = conn.execute(
+            "SELECT record_json FROM terminal_jobs WHERE job_id = ?", (job_id,),
+        ).fetchone()
+    return StoredTerminalJob.model_validate_json(row["record_json"]) if row else None
 
 
 def save_review(
