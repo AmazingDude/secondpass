@@ -60,7 +60,7 @@ CREATE TABLE IF NOT EXISTS audit_events (
     detail_json TEXT NOT NULL
 );
 
-CREATE TABLE IF NOT EXISTS terminal_jobs (
+CREATE TABLE IF NOT EXISTS review_jobs (
     job_id TEXT PRIMARY KEY,
     record_json TEXT NOT NULL
 );
@@ -92,13 +92,13 @@ class StoredReview(BaseModel):
     job_id: str | None = None
 
 
-class StoredTerminalJob(BaseModel):
-    """Final polling response metadata, separate from worker review records."""
+class StoredJob(BaseModel):
+    """Execution metadata, separate from worker findings and coverage."""
 
     job_id: str
     path: str
     options: dict[str, Any]
-    status: Literal["completed", "failed"]
+    status: Literal["queued", "running", "completed", "failed", "interrupted"]
     error: str | None = None
     result: dict[str, Any] | None = None
     created_at: datetime
@@ -278,34 +278,48 @@ def init_db(db_path: Path | str | None = None) -> Path:
     with _DB_INIT_LOCK:
         with _connection(path) as conn:
             conn.execute("PRAGMA journal_mode = WAL")
-            conn.executescript(_SCHEMA_SQL)
+            # Serialize schema inspection with migrations across processes too.
+            conn.execute("BEGIN IMMEDIATE")
+            tables = {
+                row[0] for row in conn.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'"
+                )
+            }
+            if "terminal_jobs" in tables and "review_jobs" not in tables:
+                conn.execute("ALTER TABLE terminal_jobs RENAME TO review_jobs")
+            # executescript commits an open transaction before executing SQL.
+            # These are static statements, with no semicolons inside literals.
+            for statement in _SCHEMA_SQL.split(";"):
+                if statement.strip():
+                    conn.execute(statement)
             _migrate_schema(conn)
             conn.commit()
     return path
 
 
-def save_terminal_job(
-    job: StoredTerminalJob, *, db_path: Path | str | None = None,
+def save_job(
+    job: StoredJob, *, db_path: Path | str | None = None,
 ) -> None:
-    """Save the terminal response before publishing completion to callers."""
+    """Persist a transition before publishing it to callers."""
     init_db(db_path)
     with _connection(db_path) as conn:
         conn.execute(
-            "INSERT INTO terminal_jobs (job_id, record_json) VALUES (?, ?)",
+            "INSERT INTO review_jobs (job_id, record_json) VALUES (?, ?) "
+            "ON CONFLICT(job_id) DO UPDATE SET record_json=excluded.record_json",
             (job.job_id, _dump_model(job)),
         )
         conn.commit()
 
 
-def get_terminal_job(
+def get_job(
     job_id: str, *, db_path: Path | str | None = None,
-) -> StoredTerminalJob | None:
+) -> StoredJob | None:
     init_db(db_path)
     with _connection(db_path) as conn:
         row = conn.execute(
-            "SELECT record_json FROM terminal_jobs WHERE job_id = ?", (job_id,),
+            "SELECT record_json FROM review_jobs WHERE job_id = ?", (job_id,),
         ).fetchone()
-    return StoredTerminalJob.model_validate_json(row["record_json"]) if row else None
+    return StoredJob.model_validate_json(row["record_json"]) if row else None
 
 
 def save_review(

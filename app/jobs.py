@@ -1,7 +1,8 @@
-"""In-process execution with durable terminal-job lookup in local SQLite."""
+"""Durable local lifecycle with native per-job ownership and no automatic replay."""
 
 from __future__ import annotations
 
+import hashlib
 import threading
 import uuid
 from concurrent.futures import ThreadPoolExecutor
@@ -10,9 +11,18 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Callable, Literal
 
-from app.persistence import StoredTerminalJob, get_terminal_job, save_terminal_job
+from filelock import FileLock, Timeout
 
-JobStatus = Literal["queued", "running", "completed", "failed"]
+from app.persistence import StoredJob, get_job, init_db, save_job
+
+JobStatus = Literal["queued", "running", "completed", "failed", "interrupted"]
+
+
+class JobSubmissionError(RuntimeError):
+    """The request could not be durably accepted; no execution was dispatched."""
+
+
+_INTERRUPTED_MESSAGE = "Review interrupted. Saved findings remain available; start a new review to retry."
 
 ReviewRunner = Callable[..., dict[str, Any]]
 
@@ -46,7 +56,7 @@ class ReviewJob:
 
 
 class JobStore:
-    """Live jobs plus saved terminal responses; historical lookup never replays."""
+    """Local execution plus durable status; native ownership fences recovery."""
 
     def __init__(
         self,
@@ -56,7 +66,7 @@ class JobStore:
         db_path: Path | str | None = None,
     ) -> None:
         self._jobs: dict[str, ReviewJob] = {}
-        self._lock = threading.Lock()
+        self._lock = threading.RLock()
         self._executor = ThreadPoolExecutor(max_workers=max_workers)
         self._runner = runner or self._default_runner
         self._db_path = db_path
@@ -136,15 +146,76 @@ class JobStore:
             status="queued",
         )
         with self._lock:
+            ownership = None
+            try:
+                ownership = self._job_lock(job.job_id)
+                ownership.acquire(timeout=0)
+                self._save(job)
+            except Exception:
+                if ownership is not None:
+                    ownership.release()
+                raise JobSubmissionError("Could not save the review request. Check local storage and retry.") from None
             self._jobs[job.job_id] = job
-        self._executor.submit(self._execute, job.job_id)
+            try:
+                future = self._executor.submit(self._execute, job.job_id)
+            except RuntimeError:
+                self._jobs.pop(job.job_id)
+                job.status = "failed"
+                job.error = "Review could not be started. Start a new review to retry."
+                try:
+                    self._save(job)
+                except Exception:
+                    pass  # Saved queued work is recoverable as interrupted.
+                finally:
+                    ownership.release()
+                raise JobSubmissionError(job.error) from None
+
+        def finished(completed: Any) -> None:
+            try:
+                if completed.cancelled():
+                    self._update(job.job_id, status="interrupted", error=_INTERRUPTED_MESSAGE)
+            finally:
+                ownership.release()
+
+        future.add_done_callback(finished)
         return job
+
+    def _job_lock(self, job_id: str) -> FileLock:
+        # Resolve aliases once so executor and readers use the same lock path.
+        self._db_path = init_db(self._db_path).resolve()
+        directory = self._db_path.parent / (self._db_path.name + ".job-locks")
+        directory.mkdir(exist_ok=True)
+        name = hashlib.sha256(job_id.encode("utf-8")).hexdigest()
+        return FileLock(
+            directory / (name + ".lock"), thread_local=False,
+            fallback_to_soft=False, preserve_lock_file=True,
+        )
+
+    def _save(self, job: ReviewJob) -> None:
+        save_job(StoredJob(**vars(job)), db_path=self._db_path)
 
     def get(self, job_id: str) -> ReviewJob | None:
         with self._lock:
             job = self._jobs.get(job_id)
             if job is None:
-                saved = get_terminal_job(job_id, db_path=self._db_path)
+                saved = get_job(job_id, db_path=self._db_path)
+                if saved is not None and saved.status in {"queued", "running"}:
+                    ownership = self._job_lock(job_id)
+                    try:
+                        ownership.acquire(timeout=0)
+                    except Timeout:
+                        pass  # Another live executor still owns this job.
+                    else:
+                        try:
+                            # Owner could have completed between read and lock.
+                            saved = get_job(job_id, db_path=self._db_path)
+                            if saved is not None and saved.status in {"queued", "running"}:
+                                saved.status = "interrupted"
+                                saved.error = _INTERRUPTED_MESSAGE
+                                saved.updated_at = datetime.now(timezone.utc)
+                                save_job(saved, db_path=self._db_path)
+                        finally:
+                            ownership.release()
                 return ReviewJob(**saved.model_dump()) if saved is not None else None
             # Return a shallow snapshot so callers don't mutate internal state.
             return ReviewJob(
@@ -165,32 +236,35 @@ class JobStore:
         status: JobStatus,
         error: str | None = None,
         result: dict[str, Any] | None = None,
-    ) -> None:
+    ) -> bool:
         with self._lock:
             job = self._jobs[job_id]
             when = datetime.now(timezone.utc)
-            if status in {"completed", "failed"}:
-                try:
-                    save_terminal_job(
-                        StoredTerminalJob(
-                            job_id=job.job_id, path=job.path, options=job.options,
-                            status=status, error=error, result=result,
-                            created_at=job.created_at, updated_at=when,
-                        ),
-                        db_path=self._db_path,
-                    )
-                except Exception:
-                    # Do not advertise durable completion when saving failed.
-                    status = "failed"
-                    error = "Could not save the job result. Check local storage and retry."
-                    result = None
+            persisted = True
+            try:
+                save_job(
+                    StoredJob(
+                        job_id=job.job_id, path=job.path, options=job.options,
+                        status=status, error=error, result=result,
+                        created_at=job.created_at, updated_at=when,
+                    ),
+                    db_path=self._db_path,
+                )
+            except Exception:
+                # Do not advertise durable completion when saving failed.
+                persisted = False
+                status = "failed"
+                error = "Could not save the job result. Check local storage and retry."
+                result = None
             job.status = status
             job.error = error
             job.result = result
             job.updated_at = when
+            return persisted
 
     def _execute(self, job_id: str) -> None:
-        self._update(job_id, status="running")
+        if not self._update(job_id, status="running"):
+            return
         try:
             with self._lock:
                 path = self._jobs[job_id].path
@@ -224,8 +298,12 @@ class JobStore:
         return self._runner(path, **kwargs)
 
     def shutdown(self, *, wait: bool = False) -> None:
-        self._executor.shutdown(wait=wait, cancel_futures=True)
+        with self._lock:
+            self._executor.shutdown(wait=False, cancel_futures=True)
+        if wait:
+            # Workers need the store lock to publish their final transition.
+            self._executor.shutdown(wait=True)
 
 
-# Process-wide executor; terminal responses are looked up lazily after restart.
+# Process-wide executor; abandoned work is marked interrupted on lookup.
 job_store = JobStore()

@@ -207,13 +207,23 @@ The snapshot freezes appended review records for that traversal, not source
 content or execution state. Refresh without a snapshot to see newer records.
 Records without a nonempty job ID remain individual reviews; audit-only jobs
 have no result group. Exact lookup returns 404 when no linked reviews exist.
-`/reviews/jobs/{job_id}` also recovers completed/failed API job responses saved
-by this version, including request options, timestamps and the final report.
-These use the same local SQLite database as worker reviews. Completion means
-execution finished, not that analysis was complete or found no issues. Legacy
-review groups are not converted into completed jobs. Active jobs remain
-in-memory and cannot be recovered after restart; lookup never resumes work.
-No dashboard run browser or hosted authentication is included; keep the API local.
+API requests and lifecycle transitions are saved before dispatch or publication.
+`/reviews/jobs/{job_id}` retrieves these records after restart, including request
+options, timestamps and any final report. A live executor retains a native OS
+lock for each job. Lookup marks abandoned queued/running work **interrupted**,
+never reruns it, and leaves saved worker findings available through History.
+The dashboard stops polling interrupted jobs and displays a warning.
+
+Use a local SQLite database on a filesystem supporting native file locking;
+unsupported locking fails submission rather than silently using marker files.
+Do not delete the database's adjacent `.job-locks` directory while any executor
+or reader is active. Lock files intentionally remain to preserve their identity.
+This is not a distributed queue, automatic resume, or a guarantee of global
+concurrency limits across API processes. Failed storage/dispatch returns HTTP503
+without acknowledging a runnable job. Completion means execution finished,
+not that analysis was complete or found no issues. Legacy review groups are
+not converted into completed jobs. No dashboard run browser or hosted
+authentication is included; keep the API local.
 
 ---
 

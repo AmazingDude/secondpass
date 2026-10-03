@@ -22,6 +22,7 @@ import {
 } from "../api";
 import { AgentTimeline } from "../components/AgentTimeline";
 import { derivePipelineFromAudit } from "../pipelineTimeline";
+import { isTerminalJobStatus } from "../jobLifecycle";
 
 const POLL_MS = 600;
 const PREVIEW_DEBOUNCE_MS = 450;
@@ -400,7 +401,7 @@ export function SubmitReview({
         }
         return;
       }
-      if (next.status === "failed") {
+      if (isTerminalJobStatus(next.status)) {
         setError(next.error || "Review job failed");
         return;
       }
@@ -442,7 +443,8 @@ export function SubmitReview({
   }
 
   const status = job?.status;
-  const polling = Boolean(jobId) && status !== "failed" && status !== "completed";
+  const polling = Boolean(jobId) && !isTerminalJobStatus(status);
+  const unsuccessful = status === "failed" || status === "interrupted";
   const running = submitting || polling || status === "queued" || status === "running";
   const hasPersistedAudit = auditEvents.some(
     (event) =>
@@ -488,16 +490,20 @@ export function SubmitReview({
         });
       }
     }
-    return [...states.entries()].map(([file, value]) => ({ file, ...value }));
-  }, [auditEvents, preview]);
+    return [...states.entries()].map(([file, value]) => {
+      const state = isTerminalJobStatus(status) && value.state !== "completed"
+        ? "stopped" : value.state;
+      return { file, ...value, state };
+    });
+  }, [auditEvents, preview, status]);
 
   const completedFiles = fileProgress.filter(
     (item) => item.state === "completed",
   ).length;
 
   const statusLabel =
-    status === "failed"
-      ? "failed"
+    unsuccessful
+      ? status
       : status === "completed"
         ? "completed"
         : status === "running"
@@ -511,7 +517,7 @@ export function SubmitReview({
   function jobStageState(
     stageId: (typeof JOB_STAGES)[number]["id"],
   ): "idle" | "active" | "done" | "warn" {
-    if (status === "failed") {
+    if (unsuccessful) {
       if (stageId === "queued") return "done";
       if (stageId === "running") return "warn";
       return "idle";
@@ -732,7 +738,7 @@ export function SubmitReview({
 
       {(jobId || job) && (
         <div
-          className={`submit-run-grid ${status === "failed" ? "is-failed" : ""}`}
+          className={`submit-run-grid ${unsuccessful ? "is-failed" : ""}`}
           aria-live="polite"
         >
           <section className="card submit-progress-card">
@@ -750,7 +756,8 @@ export function SubmitReview({
 
             {error ? (
               <div className="job-failure-banner" role="alert">
-                <strong>Review failed.</strong> {error}
+                <strong>{status === "interrupted" ? "Review interrupted." : "Review failed."}</strong> {error}
+                {status === "interrupted" ? " Open History to inspect any saved worker findings." : null}
               </div>
             ) : null}
 
@@ -799,6 +806,8 @@ export function SubmitReview({
                       <span className="file-progress-mark" aria-hidden>
                         {item.state === "completed" ? (
                           <Check />
+                        ) : item.state === "stopped" ? (
+                          <AlertTriangle />
                         ) : item.state === "running" ? (
                           <Loader2 className="spin" />
                         ) : (
@@ -809,7 +818,7 @@ export function SubmitReview({
                       <span className="file-progress-state">
                         {item.state === "completed"
                           ? `${item.accepted ?? 0} accepted · ${item.needs ?? 0} needs review`
-                          : item.state}
+                          : item.state === "stopped" ? "not completed" : item.state}
                       </span>
                     </div>
                   ))}
@@ -836,7 +845,7 @@ export function SubmitReview({
             <AgentTimeline
               states={pipeline.states}
               info={pipeline.info}
-              running={running && status !== "completed" && status !== "failed"}
+              running={running && !isTerminalJobStatus(status)}
               doneCount={pipeline.doneCount}
               totalCount={pipeline.totalCount}
               percent={pipeline.percent}
@@ -849,14 +858,16 @@ export function SubmitReview({
               <span className="audit-log-count">
                 {auditEvents.length
                   ? `${auditEvents.length} lines`
-                  : "connecting"}
+                  : isTerminalJobStatus(status) ? "stopped" : "connecting"}
               </span>
             </div>
             <div className="audit-log mono" ref={auditLogRef}>
               {auditEvents.length === 0 ? (
                 <p className="audit-log-waiting">
-                  <span className="spinner" aria-hidden="true" />
-                  waiting for a job · events stream here
+                  {!isTerminalJobStatus(status) ? <span className="spinner" aria-hidden="true" /> : null}
+                  {isTerminalJobStatus(status)
+                    ? "No saved events for this job."
+                    : "waiting for a job · events stream here"}
                 </p>
               ) : (
                 auditEvents.map((event) => (

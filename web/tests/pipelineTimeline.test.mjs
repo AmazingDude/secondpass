@@ -3,6 +3,16 @@ import test from "node:test";
 
 import { derivePipelineFromAudit } from "../src/pipelineTimeline.ts";
 
+test("interrupted work warns instead of leaving an agent active", () => {
+  const events = [{
+    stage: "agent_event", kind: "agent_event", worker_name: "security",
+    detail: { agent: "supervisor", message: "supervisor -> security_worker" },
+  }];
+  const timeline = derivePipelineFromAudit(events, "interrupted");
+  assert.equal(timeline.states.security, "warn");
+  assert.notEqual(timeline.states.supervisor, "active");
+});
+
 test("incomplete architecture review with findings remains a warning", () => {
   const events = [
     {
