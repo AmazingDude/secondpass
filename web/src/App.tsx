@@ -5,6 +5,7 @@ import { FindingsView } from "./views/FindingsView";
 import { HistoryView } from "./views/HistoryView";
 import { MemoryView } from "./views/MemoryView";
 import { SubmitReview } from "./views/SubmitReview";
+import { SavedReviewView } from "./views/SavedReviewView";
 import { navigate, useDashboardRoute } from "./navigation";
 
 type Tab = "submit" | "findings" | "history" | "memory";
@@ -32,8 +33,6 @@ export default function App() {
   const [lastFindings, setLastFindings] = useState<{
     reviews: ReviewPayload[];
     jobPath?: string;
-    backTo: "submit" | "history";
-    backLink: string;
   } | null>(null);
   const [loadError, setLoadError] = useState<string | null>(null);
 
@@ -41,12 +40,9 @@ export default function App() {
     (
       reviews: ReviewPayload[],
       jobPath?: string,
-      backTo: "submit" | "history" = "history",
     ) => {
       findingsGeneration.current += 1;
-      const backLink = backTo === "history" ? window.location.hash : "#/submit";
-      const next = { reviews, jobPath, backTo, backLink };
-      setLastFindings(next);
+      setLastFindings({ reviews, jobPath });
       navigate("#/findings");
     },
     [],
@@ -64,7 +60,7 @@ export default function App() {
       if (generation !== findingsGeneration.current) return;
       // Stay on Submit so the live timeline/audit trail remain visible;
       // Findings opens only when the user chooses.
-      setLastFindings({ reviews, jobPath: job.path, backTo: "submit", backLink: "#/submit" });
+      setLastFindings({ reviews, jobPath: job.path });
     } catch (err) {
       if (generation === findingsGeneration.current) {
         setLoadError(err instanceof Error ? err.message : String(err));
@@ -134,7 +130,6 @@ export default function App() {
                       openFindings(
                         lastFindings.reviews,
                         lastFindings.jobPath,
-                        "submit",
                       )
                   : undefined
               }
@@ -142,11 +137,12 @@ export default function App() {
           ) : null}
 
           {screen.name === "findings" ? (
+            screen.reviewId !== undefined ? <SavedReviewView key={screen.reviewId} reviewId={screen.reviewId} /> :
             <FindingsView
               reviews={lastFindings?.reviews ?? []}
               jobPath={lastFindings?.jobPath}
-              onBack={() => navigate(lastFindings?.backLink || "#/history")}
-              backLabel={lastFindings?.backTo === "submit" ? "Submit" : "History"}
+              onBack={() => navigate(lastFindings ? "#/submit" : "#/history")}
+              backLabel={lastFindings ? "Submit" : "History"}
             />
           ) : null}
 
@@ -154,9 +150,6 @@ export default function App() {
             <HistoryView
               view={screen.view}
               jobId={screen.jobId}
-              onOpenReview={(review) => {
-                openFindings([review], review.file_path, "history");
-              }}
             />
           ) : null}
 
