@@ -1,7 +1,7 @@
 """Lightweight FastAPI backend: submit → poll job → fetch reviews / outcomes.
 
-No auth. Active execution is in-process; terminal job responses and worker
-ReviewResult rows live in SQLite. Restart does not resume active reviews.
+No auth. Execution is in-process; job lifecycle and worker results live in
+SQLite. Abandoned jobs are interrupted on lookup, never automatically resumed.
 """
 
 from __future__ import annotations
@@ -14,7 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from app.jobs import job_store
+from app.jobs import JobSubmissionError, job_store
 from app.multifile import select_python_files
 from app.persistence import (
     DEFAULT_DB_PATH,
@@ -108,6 +108,11 @@ def _serialize_outcome(stored: Any, memory_promotion: dict[str, Any] | None = No
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.exception_handler(JobSubmissionError)
+def job_submission_error_handler(_request: Request, exc: JobSubmissionError) -> JSONResponse:
+    return JSONResponse(status_code=503, content={"detail": str(exc)})
 
 
 @app.get("/v1/runs", response_model=LegacyRunPage)

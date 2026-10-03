@@ -1,6 +1,7 @@
 /** Derive agent-timeline node states from real audit / hook events. */
 
 import type { AuditEvent } from "./api";
+import { isTerminalJobStatus } from "./jobLifecycle.ts";
 
 export type NodeId =
   | "supervisor"
@@ -400,10 +401,10 @@ export function derivePipelineFromAudit(
     }
   }
 
-  if (jobStatus === "completed" || jobStatus === "failed") {
+  if (isTerminalJobStatus(jobStatus)) {
     for (const id of ALL_NODE_IDS) {
       if (states[id] === "active") {
-        mark(states, id, jobStatus === "failed" ? "warn" : "done");
+        mark(states, id, jobStatus === "completed" ? "done" : "warn");
       }
     }
   }
