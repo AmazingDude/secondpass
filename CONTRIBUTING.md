@@ -97,6 +97,51 @@ uploaded. This separate command runs in frontend CI alongside `npm test`, which
 still runs the pipeline tests. It also checks SIGTERM cleanup on POSIX systems;
 that lifecycle test is skipped on Windows, which does not deliver that signal.
 
+## Detection benchmarks
+
+Offline contract tests do not generate benchmark artifacts:
+
+```sh
+python -m pytest tests/test_benchmark.py tests/test_benchmark_run.py -q
+```
+
+To generate a static-only result in `benchmark/results/`, run:
+
+```sh
+python -m app.benchmark_run --offline --label static_smoke
+python -m app.benchmark_run_real_world --offline --label real_world_static
+```
+
+These commands use Semgrep, whose default rule packs may require network access,
+but make no model calls. Omit `--offline` for assisted Security evaluation;
+`python -m app.benchmark_run_architecture --label architecture_smoke` is assisted
+only. Assisted runs need provider configuration, may incur charges, and can
+initialize lesson memory. Use distinct labels: result filenames still use
+`label_YYYYMMDD.json`, so repeating a label on the same day overwrites its file.
+
+New results include an `evaluation` summary (`coverage-v1`). It keeps legacy
+file/type set matching: it is not instance-level accuracy or a calibration claim.
+The original five-field `score` remains unchanged for historical comparisons;
+do not treat its zero-denominator defaults as evidence of perfect accuracy.
+
+The CLI displays the new summary with exact numerators and denominators:
+
+- Conditional precision/recall use only fixtures with explicitly completed
+  coverage. Undefined metrics are `null` in JSON and `n/a` in the CLI.
+- Detection yield counts observed expected file/type keys, including retained
+  findings with incomplete or unknown coverage, against all requested expected
+  keys. A finding does not by itself establish completed analysis.
+- Completion counts include clean controls. Failed scans are inconclusive,
+  missing fixtures/exceptions are errored, and absent coverage is unknown.
+- Zero completed fixtures are invalid; partial completion is incomplete.
+  A completed clean-only run has undefined detection metrics, not 100% accuracy.
+
+Empty ground truth is still rejected. Historical files are not rewritten, and
+missing metadata in an old artifact cannot establish completed coverage. This
+summary covers the scored fixture loop, not the runners' separate cross-worker
+checks. Runner exit status is not yet a coverage/quality gate: inspect the
+summary even when the command exits successfully.
+
 ## CI and review
 
 Pull requests and pushes to `main` run separate Python and frontend jobs in
