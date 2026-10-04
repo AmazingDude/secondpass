@@ -6,7 +6,7 @@ import { HistoryView } from "./views/HistoryView";
 import { MemoryView } from "./views/MemoryView";
 import { SubmitReview } from "./views/SubmitReview";
 import { SavedReviewView } from "./views/SavedReviewView";
-import { navigate, useDashboardRoute } from "./navigation";
+import { memoryLink, navigate, useDashboardRoute } from "./navigation";
 
 type Tab = "submit" | "findings" | "history" | "memory";
 
@@ -70,6 +70,12 @@ export default function App() {
 
   function goTab(tab: Tab) {
     setLoadError(null);
+    if (tab === "memory") {
+      const reviewId = (screen.name === "findings" || screen.name === "memory") && screen.reviewId !== undefined
+        ? screen.reviewId : lastFindings?.reviews[0]?.id;
+      navigate(reviewId === undefined ? "#/memory" : memoryLink(reviewId));
+      return;
+    }
     navigate(`#/${tab}`);
   }
 
@@ -154,7 +160,8 @@ export default function App() {
           ) : null}
 
           {screen.name === "memory" ? (
-            <MemoryView initialReviewId={lastFindings?.reviews[0]?.id ?? null} />
+            <MemoryView key={screen.reviewId ?? "recent"} reviewId={screen.reviewId}
+              onSelectReview={reviewId => navigate(memoryLink(reviewId))} />
           ) : null}
           {screen.name === "invalid" ? <div className="card">
             <p className="error-text" role="alert">Invalid dashboard link. Open History to find a saved job.</p>

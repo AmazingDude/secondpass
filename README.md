@@ -237,6 +237,11 @@ show an error with a History recovery link, not a clean analysis result.
 Submission-wide Findings at `#/findings` remains transient: after reload, reopen
 the saved workers from History. Live monitoring is unchanged.
 
+Memory keeps an explicit selection at `#/memory/reviews/<review_id>` across
+reload and browser navigation. Opening Memory from a saved review keeps that
+review even if it is outside the recent list; missing records never select a
+different review automatically. The picker updates the link when you choose.
+
 Use a local SQLite database on a filesystem supporting native file locking;
 unsupported locking fails submission rather than silently using marker files.
 Do not delete the database's adjacent `.job-locks` directory while any executor

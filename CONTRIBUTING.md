@@ -73,6 +73,32 @@ The build includes TypeScript checking. The frontend tests cover the audit
 pipeline timeline; for other UI changes, also check the affected flow in a
 browser and describe what you checked in the PR.
 
+The saved-review to Memory regression is also runnable in a real browser. It
+uses fixed HTTP fixtures, needs no backend or provider keys, and writes no real
+outcomes. With the default API URL (`http://127.0.0.1:8000`), build and serve the
+frontend in one terminal, from `web/`:
+
+```sh
+npm run build
+npm run preview -- --host 127.0.0.1 --port 5174 --strictPort
+```
+
+In another terminal, from the repository root, use Playwright CLI with Chromium
+available. Running from `output/playwright/` keeps its generated files local:
+
+```sh
+mkdir -p output/playwright
+cd output/playwright
+npx --package @playwright/cli playwright-cli -s=memory-regression open http://127.0.0.1:5174
+npx --package @playwright/cli playwright-cli -s=memory-regression run-code --filename ../../web/tests/memoryHandoff.browser.js
+npx --package @playwright/cli playwright-cli -s=memory-regression close
+```
+
+On PowerShell, create the directory with `New-Item -ItemType Directory -Force
+output/playwright`. The CLI/browser download may need network access. This is
+an explicit local regression check, not part of `npm test` or CI yet; a failed
+assertion exits nonzero. Stop the preview after checking.
+
 ## CI and review
 
 Pull requests and pushes to `main` run separate Python and frontend jobs in
