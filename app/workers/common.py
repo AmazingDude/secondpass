@@ -124,6 +124,10 @@ def run_tool_loop(
                 if iteration == max_iterations - 1:
                     final = {"error": "Provider rejected tool calls before finishing."}
                 continue
+            except Exception:  # noqa: BLE001 — provider failure must not discard detector findings
+                failures += 1
+                final = {"error": "Enrichment provider request failed."}
+                break
 
             message = response.choices[0].message
             messages.append(assistant_message_dict(message))
