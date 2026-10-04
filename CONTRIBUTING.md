@@ -139,8 +139,19 @@ The CLI displays the new summary with exact numerators and denominators:
 Empty ground truth is still rejected. Historical files are not rewritten, and
 missing metadata in an old artifact cannot establish completed coverage. This
 summary covers the scored fixture loop, not the runners' separate cross-worker
-checks. Runner exit status is not yet a coverage/quality gate: inspect the
-summary even when the command exits successfully.
+checks. Runner exit status is not yet a general scored-coverage/quality gate:
+inspect the summary even when the command exits successfully.
+
+Assisted runners and `python -m app.benchmark_cross_worker --live` require
+explicitly completed coverage before a cross-worker check can pass. Incomplete
+or unknown reports, or reports with unverified model claims, raise a cross-worker
+error and make the command fail, even when no findings were returned. Completed
+coverage still has to pass the existing
+category-bleed checks; completion is not evidence of accuracy. Runners save the
+scored result before these checks, so a failed check does not discard retained
+findings. That JSON's `evaluation` summary does not certify the later checks;
+check the command's exit status too. This is not a general scored-coverage or
+quality-threshold exit gate, and fixture-presence-only checks make no analysis claim.
 
 ## CI and review
 

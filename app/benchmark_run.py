@@ -288,7 +288,7 @@ def run_benchmark(
         inconclusive = bool(report.get("inconclusive"))
         coverage_status = (report.get("review_result") or {}).get(
             "coverage_status"
-        ) or ("inconclusive" if inconclusive else "ok")
+        ) or ("inconclusive" if inconclusive else None)
 
         expected = [
             issue["finding_type"]
@@ -306,6 +306,7 @@ def run_benchmark(
                 "accepted+needs_review" if include_needs_review else "accepted"
             ),
             "inconclusive": inconclusive,
+            "claim_unverified": bool(report.get("claim_unverified")),
             "coverage_status": coverage_status,
             "evaluation_status": fixture_evaluation_status(report),
             "expected_finding_types": expected,
@@ -415,6 +416,10 @@ def run_benchmark(
                     f"cross-worker Security review failed for {key}: {note['error']}"
                 )
             fake_report = {
+                "inconclusive": note.get("inconclusive"),
+                "claim_unverified": note.get("claim_unverified"),
+                "static_scan_error": note.get("static_scan_error"),
+                "review_result": {"coverage_status": note.get("coverage_status")},
                 "accepted": [
                     {
                         "structured_finding": {

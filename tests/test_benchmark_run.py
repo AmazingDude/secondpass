@@ -48,7 +48,9 @@ def test_architecture_invalid_provider_response_is_not_perfect_accuracy(
     monkeypatch.setattr("app.llm.OpenAI", ScriptedClient)
     monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
 
-    payload = run_architecture_benchmark(results_dir=tmp_path, label="invalid-model")
+    with pytest.raises(RuntimeError, match="cross-worker Architecture review is inconclusive"):
+        run_architecture_benchmark(results_dir=tmp_path, label="invalid-model")
+    payload = json.loads(next(tmp_path.glob("invalid-model_*.json")).read_text(encoding="utf-8"))
 
     assert payload["score"]["precision"] == payload["score"]["recall"] == 1.0
     summary = payload["evaluation"]
@@ -469,6 +471,7 @@ def test_run_benchmark_excludes_inconclusive_fixture_from_false_negatives(
             "static_scan_error": None,
             "used_logic_fallback": False,
             "inconclusive": False,
+            "review_result": {"coverage_status": "ok"},
             "message": "clean",
         }
 
@@ -543,6 +546,7 @@ def test_run_benchmark_inconclusive_fixture_with_a_prediction_is_not_scored_as_f
             "static_scan_error": None,
             "used_logic_fallback": False,
             "inconclusive": False,
+            "review_result": {"coverage_status": "ok"},
             "message": "clean",
         }
 
