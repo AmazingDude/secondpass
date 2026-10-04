@@ -698,6 +698,15 @@ def review_code(
         for finding in findings
     ]
 
+    if any(item.get("enrichment_inconclusive") for item in reviewed):
+        enrichment_note = "Finding enrichment could not complete."
+        incomplete_message = (
+            f"{incomplete_message} {enrichment_note}"
+            if inconclusive
+            else f"inconclusive — {enrichment_note}"
+        )
+        inconclusive = True
+
     _emit_stage(on_stage, "building_report")
     review_result, gate_result, accepted, needs_review = build_security_review_output(
         target,

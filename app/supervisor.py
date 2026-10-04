@@ -126,11 +126,11 @@ def _synthesize(
                 tools=None,
                 temperature=0,
             )
-        except Exception as exc:  # noqa: BLE001
+        except Exception:  # noqa: BLE001 — provider details do not belong in findings
             failures += 1
             return (
                 {
-                    "explanation": f"Supervisor synthesis failed: {exc}",
+                    "explanation": "Finding synthesis could not complete.",
                     "suggested_fix": "",
                 },
                 failures,
@@ -260,6 +260,12 @@ def supervise_finding(
         "explanation": str(synth.get("explanation") or "").strip(),
         "suggested_fix": str(synth.get("suggested_fix") or "").strip(),
         "tool_call_failures": failures,
+        # Recovered tool retries and routing fallback are not unresolved failures.
+        "enrichment_inconclusive": bool(
+            synth_failures
+            or (memory_result or {}).get("error")
+            or (web_result or {}).get("error")
+        ),
         "routing": route,
         "memory_worker": memory_result,
         "web_worker": web_result,
