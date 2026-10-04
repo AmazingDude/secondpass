@@ -1,11 +1,11 @@
 import { useEffect, useMemo, useState } from "react";
 import { listReviews, type ReviewPayload } from "../api";
 import { JobHistory } from "./JobHistory";
+import { reviewLink } from "../navigation";
 
 const PAGE_SIZE = 20;
 
 type Props = {
-  onOpenReview: (review: ReviewPayload) => void;
   view: "jobs" | "workers";
   jobId?: string;
 };
@@ -35,7 +35,7 @@ function shortPath(path: string): string {
   return `…/${parts.slice(-2).join("/")}`;
 }
 
-export function HistoryView({ onOpenReview, view, jobId }: Props) {
+export function HistoryView({ view, jobId }: Props) {
   const [reviews, setReviews] = useState<ReviewPayload[]>([]);
   const [visibleCount, setVisibleCount] = useState(PAGE_SIZE);
   const [loading, setLoading] = useState(true);
@@ -73,7 +73,7 @@ export function HistoryView({ onOpenReview, view, jobId }: Props) {
   if (view === "jobs") return <div>
     <p className="app-eyebrow">History</p>
     <h1 className="app-title">Previous jobs</h1>
-    <JobHistory key={jobId ?? "jobs"} jobId={jobId} onOpenReview={onOpenReview} />
+    <JobHistory key={jobId ?? "jobs"} jobId={jobId} />
     <a className="btn btn-ghost" href="#/history/workers">Older worker reviews</a>
   </div>;
 
@@ -125,16 +125,6 @@ export function HistoryView({ onOpenReview, view, jobId }: Props) {
                 {visible.map((review) => (
                   <tr
                     key={review.id}
-                    className="history-row is-clickable"
-                    tabIndex={0}
-                    aria-label={`Open review ${review.id}`}
-                    onClick={() => onOpenReview(review)}
-                    onKeyDown={(event) => {
-                      if (event.key === "Enter" || event.key === " ") {
-                        event.preventDefault();
-                        onOpenReview(review);
-                      }
-                    }}
                   >
                     <td className="mono history-col-id">{review.id}</td>
                     <td className="history-col-when">
@@ -174,7 +164,7 @@ export function HistoryView({ onOpenReview, view, jobId }: Props) {
                       )}
                     </td>
                     <td className="history-col-action">
-                      <span className="history-row-hint">Open</span>
+                      <a href={reviewLink(review.id)} aria-label={`Open review ${review.id}`}>Open</a>
                     </td>
                   </tr>
                 ))}

@@ -17,7 +17,8 @@ import { CodeBlock } from "../components/CodeBlock";
 import { ReviewCombobox } from "../components/ReviewCombobox";
 
 type Props = {
-  initialReviewId?: number | null;
+  reviewId?: number;
+  onSelectReview: (reviewId: number) => void;
 };
 
 type OutcomeNotice = {
@@ -30,9 +31,9 @@ function fileName(path: string) {
   return path.replaceAll("\\", "/").split("/").pop() || path;
 }
 
-export function MemoryView({ initialReviewId = null }: Props) {
+export function MemoryView({ reviewId: requestedReviewId, onSelectReview }: Props) {
   const [reviews, setReviews] = useState<ReviewPayload[]>([]);
-  const [reviewId, setReviewId] = useState<number | "">("");
+  const reviewId = requestedReviewId ?? (reviews.length ? reviews[0].id : "");
   const [review, setReview] = useState<ReviewPayload | null>(null);
   const [findingIndex, setFindingIndex] = useState<number | "">("");
   const [decision, setDecision] = useState<"accept" | "reject" | null>(null);
@@ -59,12 +60,6 @@ export function MemoryView({ initialReviewId = null }: Props) {
       .then((body) => {
         if (cancelled) return;
         setReviews(body.reviews);
-        const prefer =
-          initialReviewId != null &&
-          body.reviews.some((r) => r.id === initialReviewId)
-            ? initialReviewId
-            : body.reviews[0]?.id;
-        if (prefer != null) setReviewId(prefer);
       })
       .catch((err: unknown) => {
         if (cancelled) return;
@@ -73,7 +68,7 @@ export function MemoryView({ initialReviewId = null }: Props) {
     return () => {
       cancelled = true;
     };
-  }, [initialReviewId]);
+  }, []);
 
   useEffect(() => {
     if (reviewId === "") {
@@ -110,14 +105,14 @@ export function MemoryView({ initialReviewId = null }: Props) {
 
   const reviewOptions = useMemo(
     () =>
-      reviews.map((r) => ({
+      (review && !reviews.some(r => r.id === review.id) ? [review, ...reviews] : reviews).map((r) => ({
         id: r.id,
         workerName: r.worker_name,
         filePath: r.file_path,
         fileName: fileName(r.file_path),
         createdAt: r.created_at,
       })),
-    [reviews],
+    [review, reviews],
   );
 
   async function handleSubmit(event: FormEvent) {
@@ -169,8 +164,8 @@ export function MemoryView({ initialReviewId = null }: Props) {
               label="Review result"
               options={reviewOptions}
               value={reviewId}
-              onChange={setReviewId}
-              disabled={reviews.length === 0}
+              onChange={id => { if (id !== "") onSelectReview(id); }}
+              disabled={reviewOptions.length === 0}
             />
             {review ? (
               <div className="selected-option-detail">

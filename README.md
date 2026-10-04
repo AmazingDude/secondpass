@@ -230,8 +230,17 @@ and older worker reviews are `#/history/workers`. Opening or reloading a job
 link retrieves that recorded job, and browser back/forward restores the view.
 Hash links work on static hosting without server rewrite rules. They are local
 navigation links, not public share links or an authorization mechanism.
-The Findings payload is still transient: reload its tab and reopen the saved
-review from its job or worker history. Live monitoring is unchanged.
+Individual saved worker reviews use `#/reviews/<review_id>`. Opening or reloading
+one retrieves its original findings and coverage; Back to History returns to its
+recorded job, or older worker reviews when no job ID was recorded. Missing reviews
+show an error with a History recovery link, not a clean analysis result.
+Submission-wide Findings at `#/findings` remains transient: after reload, reopen
+the saved workers from History. Live monitoring is unchanged.
+
+Memory keeps an explicit selection at `#/memory/reviews/<review_id>` across
+reload and browser navigation. Opening Memory from a saved review keeps that
+review even if it is outside the recent list; missing records never select a
+different review automatically. The picker updates the link when you choose.
 
 Use a local SQLite database on a filesystem supporting native file locking;
 unsupported locking fails submission rather than silently using marker files.
