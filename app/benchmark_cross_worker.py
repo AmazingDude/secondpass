@@ -12,6 +12,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agent import is_architecture_category_bleed
+from app.benchmark import fixture_evaluation_status
 from app.workers.architecture_worker import is_security_category_bleed
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -73,11 +74,23 @@ def architecture_findings_have_security_bleed(
     return bled
 
 
+def _require_conclusive_review(
+    report: dict[str, Any], *, worker_name: str, file_path: str,
+) -> None:
+    status = fixture_evaluation_status(report)
+    if status != "completed":
+        raise RuntimeError(f"cross-worker {worker_name} review is {status} for {file_path}")
+    if report.get("claim_unverified"):
+        raise RuntimeError(f"cross-worker {worker_name} review has unverified claims for {file_path}")
+
+
 def assert_security_report_clean_of_architecture_bleed(
     report: dict[str, Any],
     *,
     file_path: str,
 ) -> None:
+    """Require completed coverage and resolved claims before checking bleed."""
+    _require_conclusive_review(report, worker_name="Security", file_path=file_path)
     items = list(report.get("accepted") or []) + list(report.get("needs_review") or [])
     bled = security_items_have_architecture_bleed(items)
     if bled:
@@ -91,6 +104,8 @@ def assert_architecture_report_clean_of_security_bleed(
     *,
     file_path: str,
 ) -> None:
+    """Require completed coverage and resolved claims before checking bleed."""
+    _require_conclusive_review(report, worker_name="Architecture", file_path=file_path)
     gate = report.get("gate_result") or {}
     findings: list[Any] = []
     if isinstance(gate, dict):
