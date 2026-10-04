@@ -115,3 +115,16 @@ def test_load_ground_truth_matches_repo_fixtures() -> None:
     assert fixtures["benchmark/fixtures/ops_shell.py"][0]["finding_type"] == (
         "command_injection"
     )
+
+
+def test_empty_evaluation_metrics_are_undefined_without_changing_legacy_score() -> None:
+    report = evaluate([], {"fixtures": {}})
+
+    assert report.metrics() == {
+        "precision": {"numerator": 0, "denominator": 0, "value": None},
+        "recall": {"numerator": 0, "denominator": 0, "value": None},
+    }
+    assert report.model_dump() == {
+        "true_positives": 0, "false_positives": 0, "false_negatives": 0,
+        "precision": 1.0, "recall": 1.0,
+    }

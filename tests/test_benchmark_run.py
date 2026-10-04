@@ -2,7 +2,13 @@
 
 from __future__ import annotations
 
+import json
+import subprocess
+import sys
 from pathlib import Path
+from types import SimpleNamespace
+
+import pytest
 
 from app.benchmark import evaluate, load_ground_truth
 from app.benchmark_run import (
@@ -14,6 +20,47 @@ from app.benchmark_run import (
 )
 
 
+def _shell_scanner_output(path: Path) -> str:
+    """One scripted external Semgrep detection, shared by the runner controls."""
+    return json.dumps({"results": [{
+        "check_id": "subprocess-shell-true", "path": str(path),
+        "start": {"line": 2}, "end": {"line": 2},
+        "extra": {"severity": "ERROR", "message": "Shell injection"},
+    }]})
+
+
+def test_architecture_invalid_provider_response_is_not_perfect_accuracy(
+    tmp_path: Path, monkeypatch, capsys,
+) -> None:
+    from app.benchmark_run_architecture import run_architecture_benchmark
+
+    class ScriptedClient:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=self)
+
+        def create(self, **kwargs):
+            return SimpleNamespace(choices=[SimpleNamespace(
+                message=SimpleNamespace(content="not a review", tool_calls=None),
+            )])
+
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "offline-test-key")
+    monkeypatch.setattr("app.llm.OpenAI", ScriptedClient)
+    monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
+
+    payload = run_architecture_benchmark(results_dir=tmp_path, label="invalid-model")
+
+    assert payload["score"]["precision"] == payload["score"]["recall"] == 1.0
+    summary = payload["evaluation"]
+    assert summary["status"] == "invalid"
+    assert summary["fixtures"] == {
+        "requested": 3, "completed": 0, "inconclusive": 3, "errored": 0, "unknown": 0,
+    }
+    assert summary["conditional"]["recall"]["value"] is None
+    assert summary["detection_yield"] == {"numerator": 0, "denominator": 2, "value": 0.0}
+    assert "Evaluation: invalid" in capsys.readouterr().out
+
+
 def test_normalize_maps_semgrep_shell_rule_to_command_injection() -> None:
     assert (
         normalize_benchmark_finding_type(
@@ -23,11 +70,180 @@ def test_normalize_maps_semgrep_shell_rule_to_command_injection() -> None:
     )
 
 
+@pytest.mark.parametrize("suite,requested", [("security", 11), ("real_world", 8)])
+def test_failed_static_benchmark_has_no_completed_coverage(
+    tmp_path: Path, monkeypatch, capsys, suite: str, requested: int,
+) -> None:
+    monkeypatch.setattr("app.scanner.shutil.which", lambda _: sys.executable)
+    monkeypatch.setattr(
+        "app.scanner.subprocess.run",
+        lambda command, **kw: subprocess.CompletedProcess(command, 2, "", "scan unavailable"),
+    )
+    monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
+
+    if suite == "real_world":
+        from app.benchmark_run_real_world import run_benchmark as run_real_world
+        monkeypatch.setattr("app.benchmark_run_real_world._RESULTS_DIR", tmp_path)
+        payload = run_real_world(offline=True, label="failed")
+    else:
+        payload = run_benchmark(offline=True, results_dir=tmp_path, label="failed")
+
+    summary = payload["evaluation"]
+    assert summary["version"] == "coverage-v1"
+    assert summary["matching"] == "legacy-v1-file-type"
+    assert summary["status"] == "invalid"
+    assert summary["fixtures"] == {
+        "requested": requested, "completed": 0, "inconclusive": requested,
+        "errored": 0, "unknown": 0,
+    }
+    assert summary["conditional"] == {
+        "precision": {"numerator": 0, "denominator": 0, "value": None},
+        "recall": {"numerator": 0, "denominator": 0, "value": None},
+    }
+    assert summary["detection_yield"] == {"numerator": 0, "denominator": 4, "value": 0.0}
+    saved = json.loads(next(tmp_path.glob("failed_*.json")).read_text())
+    assert saved["evaluation"] == summary
+    output = capsys.readouterr().out
+    assert "Evaluation: invalid" in output
+    assert "precision=n/a (0/0)" in output
+    assert "ScoreReport:" not in output
+
+
 def test_normalize_keeps_logic_label() -> None:
     assert (
         normalize_benchmark_finding_type("missing_ownership_check")
         == "missing_ownership_check"
     )
+
+
+def test_partial_benchmark_separates_conditional_recall_from_requested_yield(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    bug = tmp_path / "bug.py"
+    bug.write_text("import subprocess\nsubprocess.run(command, shell=True)\n")
+    unavailable = tmp_path / "unavailable.py"
+    unavailable.write_text("print('not scanned')\n")
+    clean = tmp_path / "clean.py"
+    clean.write_text("print('clean')\n")
+    missing = tmp_path / "missing.py"
+    gt_path = tmp_path / "ground_truth.json"
+    gt_path.write_text(json.dumps({"fixtures": {
+        str(bug): [{"finding_type": "command_injection"}],
+        str(unavailable): [{"finding_type": "command_injection"}],
+        str(missing): [{"finding_type": "command_injection"}],
+        str(clean): [],
+    }}))
+
+    def scanner_process(command, **kwargs):
+        target = Path(command[-1])
+        if target == unavailable:
+            return subprocess.CompletedProcess(command, 2, "", "unavailable")
+        output = _shell_scanner_output(bug) if target == bug else '{"results": []}'
+        return subprocess.CompletedProcess(command, 0, output, "")
+
+    monkeypatch.setattr("app.scanner.shutil.which", lambda _: sys.executable)
+    monkeypatch.setattr("app.scanner.subprocess.run", scanner_process)
+    monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
+
+    payload = run_benchmark(offline=True, ground_truth_path=gt_path, results_dir=tmp_path)
+
+    summary = payload["evaluation"]
+    assert summary["status"] == "incomplete"
+    assert summary["fixtures"] == {
+        "requested": 4, "completed": 2, "inconclusive": 1, "errored": 1, "unknown": 0,
+    }
+    assert summary["conditional"] == {
+        "precision": {"numerator": 1, "denominator": 1, "value": 1.0},
+        "recall": {"numerator": 1, "denominator": 1, "value": 1.0},
+    }
+    assert summary["completion"] == {"numerator": 2, "denominator": 4, "value": 0.5}
+    assert summary["detection_yield"] == {"numerator": 1, "denominator": 3, "value": 1 / 3}
+    assert payload["score"]["false_negatives"] == 2  # historical scorer still includes errors
+
+
+def test_completed_clean_control_has_undefined_detection_metrics(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    clean = tmp_path / "clean.py"
+    clean.write_text("print('clean')\n")
+    gt_path = tmp_path / "ground_truth.json"
+    gt_path.write_text(json.dumps({"fixtures": {str(clean): []}}))
+    monkeypatch.setattr("app.scanner.shutil.which", lambda _: sys.executable)
+    monkeypatch.setattr(
+        "app.scanner.subprocess.run",
+        lambda command, **kw: subprocess.CompletedProcess(command, 0, '{"results": []}', ""),
+    )
+    monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
+
+    payload = run_benchmark(offline=True, ground_truth_path=gt_path, results_dir=tmp_path)
+
+    summary = payload["evaluation"]
+    assert summary["status"] == "complete"
+    assert summary["completion"]["value"] == 1.0
+    assert summary["conditional"] == {
+        "precision": {"numerator": 0, "denominator": 0, "value": None},
+        "recall": {"numerator": 0, "denominator": 0, "value": None},
+    }
+    assert summary["detection_yield"]["value"] is None
+
+
+def test_model_failure_keeps_static_hit_in_yield_but_not_conditional_metrics(
+    tmp_path: Path, monkeypatch,
+) -> None:
+    bug = tmp_path / "bug.py"
+    bug.write_text("import subprocess\nsubprocess.run(command, shell=True)\n")
+    gt_path = tmp_path / "ground_truth.json"
+    gt_path.write_text(json.dumps({"fixtures": {
+        str(bug): [{"finding_type": "command_injection"}],
+    }}))
+
+    provider_responses = iter([
+        RuntimeError("scripted logic assessment unavailable"),
+        '{"use_memory": false, "use_web": false}',
+        RuntimeError("scripted synthesis unavailable"),
+    ])
+
+    class FailedClient:
+        def __init__(self, **kwargs):
+            self.chat = SimpleNamespace(completions=self)
+
+        def create(self, **kwargs):
+            response = next(provider_responses)
+            if isinstance(response, Exception):
+                raise response
+            return SimpleNamespace(choices=[SimpleNamespace(message=SimpleNamespace(
+                content=response, tool_calls=None,
+            ))])
+
+    def unavailable_memory(**kwargs):
+        raise RuntimeError("scripted database unavailable")
+
+    scanner_output = _shell_scanner_output(bug)
+    monkeypatch.setenv("LLM_PROVIDER", "groq")
+    monkeypatch.setenv("GROQ_API_KEY", "offline-test-key")
+    monkeypatch.setattr("app.llm.OpenAI", FailedClient)
+    monkeypatch.setitem(
+        sys.modules, "chromadb", SimpleNamespace(PersistentClient=unavailable_memory),
+    )
+    monkeypatch.setattr("app.memory._DEFAULT_DB_PATH", tmp_path / "memory")
+    monkeypatch.setattr("app.scanner.shutil.which", lambda _: sys.executable)
+    monkeypatch.setattr(
+        "app.scanner.subprocess.run",
+        lambda command, **kw: subprocess.CompletedProcess(command, 0, scanner_output, ""),
+    )
+    monkeypatch.setattr("app.hooks._DEFAULT_LOG_PATH", tmp_path / "hooks.jsonl")
+
+    payload = run_benchmark(ground_truth_path=gt_path, results_dir=tmp_path)
+
+    summary = payload["evaluation"]
+    assert summary["status"] == "invalid"
+    assert summary["fixtures"]["inconclusive"] == 1
+    assert summary["conditional"]["recall"] == {
+        "numerator": 0, "denominator": 0, "value": None,
+    }
+    assert summary["detection_yield"] == {"numerator": 1, "denominator": 1, "value": 1.0}
+    assert len(payload["predictions"]) == 1
+    assert payload["score"]["true_positives"] == 0  # legacy exclusion retained
 
 
 def test_predictions_from_accepted_items_dedupe_and_remap(
@@ -206,6 +422,13 @@ def test_run_benchmark_offline_writes_results(tmp_path: Path, monkeypatch) -> No
     assert score["recall"] == 0.25
     assert payload["scored_bucket"] == "accepted"
     assert payload["mode"] == "offline_semgrep"
+    # These historical scripted reports have no explicit coverage metadata.
+    assert payload["evaluation"]["status"] == "invalid"
+    assert payload["evaluation"]["fixtures"]["unknown"] == 11
+    assert payload["evaluation"]["fixtures"]["completed"] == 0
+    assert payload["evaluation"]["detection_yield"] == {
+        "numerator": 1, "denominator": 4, "value": 0.25,
+    }
     written = list(results_dir.glob("unit_*.json"))
     assert len(written) == 1
 

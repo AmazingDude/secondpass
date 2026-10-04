@@ -27,7 +27,10 @@ from app.benchmark import (
     PredictedFinding,
     ScoreReport,
     evaluate,
+    fixture_evaluation_status,
+    format_evaluation,
     load_ground_truth,
+    summarize_evaluation,
 )
 from app.scanner import ScanError, run_static_scan
 
@@ -196,6 +199,7 @@ def _offline_review(fixture_abs: Path) -> dict[str, Any]:
         "static_scan_error": scan_error,
         "used_logic_fallback": False,
         "offline": True,
+        "review_result": {"coverage_status": "inconclusive" if scan_error else "ok"},
         "finding_count": len(structured),
         "no_issues": len(structured) == 0,
         "message": None if structured else "No static findings (offline).",
@@ -303,6 +307,7 @@ def run_benchmark(
             ),
             "inconclusive": inconclusive,
             "coverage_status": coverage_status,
+            "evaluation_status": fixture_evaluation_status(report),
             "expected_finding_types": expected,
             "predicted_finding_types": predicted_types,
             "accepted_raw_types": [
@@ -349,6 +354,7 @@ def run_benchmark(
         ]
 
     score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
+    evaluation = summarize_evaluation(all_predictions, ground_truth, per_file)
     out_dir = results_dir or _RESULTS_DIR
     out_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
@@ -369,6 +375,7 @@ def run_benchmark(
         "provider": os.getenv("LLM_PROVIDER", "groq") if not offline else None,
         "model": (os.getenv("LLM_MODEL") or None) if not offline else None,
         "score": score.model_dump(),
+        "evaluation": evaluation,
         "inconclusive_fixtures": inconclusive_fixtures,
         "scoring_note": (
             f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
@@ -380,7 +387,7 @@ def run_benchmark(
         "per_file": per_file,
     }
     out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
-    print(f"\nScoreReport: {score.model_dump()}")
+    print("\n" + format_evaluation(evaluation))
     if inconclusive_fixtures:
         print(
             f"{len(inconclusive_fixtures)} fixture(s) inconclusive — "
