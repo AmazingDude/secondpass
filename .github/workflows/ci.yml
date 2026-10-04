@@ -60,3 +60,9 @@ jobs:
         run: npm test
       - name: Type-check and build
         run: npm run build
+        env:
+          VITE_API_BASE: http://127.0.0.1:8000
+      - name: Install headless Chromium
+        run: npx --no-install playwright-cli install-browser chromium --with-deps --only-shell
+      - name: Browser navigation regression
+        run: npm run test:browser

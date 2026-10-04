@@ -73,31 +73,29 @@ The build includes TypeScript checking. The frontend tests cover the audit
 pipeline timeline; for other UI changes, also check the affected flow in a
 browser and describe what you checked in the PR.
 
-The saved-review to Memory regression is also runnable in a real browser. It
-uses fixed HTTP fixtures, needs no backend or provider keys, and writes no real
-outcomes. With the default API URL (`http://127.0.0.1:8000`), build and serve the
-frontend in one terminal, from `web/`:
+The saved-review to Memory regression runs in headless Chromium using fixed HTTP
+fixtures. It needs no backend or provider keys and writes no real outcomes. From
+`web/`, after `npm ci`, install the browser matching the lockfile, build with the
+default API URL (`http://127.0.0.1:8000`), and run:
 
 ```sh
+npx --no-install playwright-cli install-browser chromium --only-shell
 npm run build
-npm run preview -- --host 127.0.0.1 --port 5174 --strictPort
+npm run test:browser
 ```
 
-In another terminal, from the repository root, use Playwright CLI with Chromium
-available. Running from `output/playwright/` keeps its generated files local:
+These commands also work in PowerShell. On Linux, add `--with-deps` to the browser
+install command for OS libraries; downloads need network access. The CLI is an
+exact development-only pin and currently includes an alpha Playwright engine:
+use its installer rather than a different version's browser binaries.
 
-```sh
-mkdir -p output/playwright
-cd output/playwright
-npx --package @playwright/cli playwright-cli -s=memory-regression open http://127.0.0.1:5174
-npx --package @playwright/cli playwright-cli -s=memory-regression run-code --filename ../../web/tests/memoryHandoff.browser.js
-npx --package @playwright/cli playwright-cli -s=memory-regression close
-```
-
-On PowerShell, create the directory with `New-Item -ItemType Directory -Force
-output/playwright`. The CLI/browser download may need network access. This is
-an explicit local regression check, not part of `npm test` or CI yet; a failed
-assertion exits nonzero. Stop the preview after checking.
+`test:browser` serves the existing production build on `127.0.0.1:5174`; keep
+that port free. It uses an isolated browser, bounds CLI commands, and closes its
+own browser/preview on success or failure. Assertion errors exit nonzero. CLI
+artifacts stay under local `output/playwright/browser-regression/` and are not
+uploaded. This separate command runs in frontend CI alongside `npm test`, which
+still runs the pipeline tests. It also checks SIGTERM cleanup on POSIX systems;
+that lifecycle test is skipped on Windows, which does not deliver that signal.
 
 ## CI and review
 
