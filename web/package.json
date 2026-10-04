@@ -8,6 +8,7 @@
     "build": "tsc -b && vite build",
     "lint": "oxlint",
     "test": "node --test tests/pipelineTimeline.test.mjs",
+    "test:browser": "node tests/runBrowserRegression.mjs && node --test tests/browserRunnerLifecycle.test.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
@@ -18,6 +19,7 @@
     "react-syntax-highlighter": "^16.1.1"
   },
   "devDependencies": {
+    "@playwright/cli": "0.1.22",
     "@types/node": "^24.13.3",
     "@types/react": "^19.2.17",
     "@types/react-dom": "^19.2.3",
