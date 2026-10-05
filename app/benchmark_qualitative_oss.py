@@ -31,7 +31,11 @@ from typing import Any, Callable
 from dotenv import load_dotenv
 
 from app.benchmark_confidence_buckets import BUCKET_EDGES, confidence_bucket
-from app.benchmark_results import validate_benchmark_label, write_benchmark_result
+from app.benchmark_results import (
+    capture_input_manifest,
+    validate_benchmark_label,
+    write_benchmark_result,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
@@ -320,6 +324,9 @@ def run_qualitative_oss(
     exceptions, and rate limits are recorded, never silently skipped.
     """
     validate_benchmark_label(label)
+    input_manifest = capture_input_manifest(
+        _REPO_ROOT, [("source", Path(entry["file_path"])) for entry in cohort],
+    )
     load_dotenv(_REPO_ROOT / ".env")
 
     if security_fn is None or architecture_fn is None:
@@ -401,6 +408,7 @@ def run_qualitative_oss(
         "label": label,
         "date": date.today().strftime("%Y%m%d"),
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "input_manifest": input_manifest,
         "provider": provider,
         "model": model,
         "cohort_size": len(cohort),

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -85,6 +86,30 @@ def test_architecture_inconclusive_rerun_preserves_both_results(
     paths = list(tmp_path.glob("architecture-rerun_*.json"))
     assert len(paths) == 2
     assert all(json.loads(path.read_text(encoding="utf-8"))["evaluation"]["status"] == "invalid" for path in paths)
+
+
+@pytest.mark.parametrize("relative_ground_truth", [False, True])
+def test_architecture_result_records_inputs_even_when_inconclusive(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
+    monkeypatch, relative_ground_truth: bool,
+) -> None:
+    offline_boundaries("not a valid review")
+    if relative_ground_truth:
+        monkeypatch.chdir(tmp_path)
+
+    with pytest.raises(RuntimeError, match="cross-worker Architecture review is inconclusive"):
+        run_architecture_benchmark(
+            ground_truth_path=Path("ground_truth.json") if relative_ground_truth else clean_control_ground_truth,
+            results_dir=tmp_path,
+            label="architecture-inputs",
+        )
+
+    saved = json.loads(next(tmp_path.glob("architecture-inputs_*.json")).read_text(encoding="utf-8"))
+    rows = saved["input_manifest"]["inputs"]
+    assert rows == [
+        {"role": "ground_truth", "path": str(clean_control_ground_truth), "status": "present", "sha256": hashlib.sha256(clean_control_ground_truth.read_bytes()).hexdigest()},
+        {"role": "source", "path": _CLEAN_ARCHITECTURE_FIXTURE, "status": "present", "sha256": hashlib.sha256((Path(__file__).resolve().parents[1] / _CLEAN_ARCHITECTURE_FIXTURE).read_bytes()).hexdigest()},
+    ]
 
 
 def test_legacy_unknown_coverage_cannot_pass_security_cross_worker_check(

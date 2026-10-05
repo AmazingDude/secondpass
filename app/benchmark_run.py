@@ -32,7 +32,11 @@ from app.benchmark import (
     load_ground_truth,
     summarize_evaluation,
 )
-from app.benchmark_results import validate_benchmark_label, write_benchmark_result
+from app.benchmark_results import (
+    capture_input_manifest,
+    validate_benchmark_label,
+    write_benchmark_result,
+)
 from app.scanner import ScanError, run_static_scan
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -234,6 +238,12 @@ def run_benchmark(
     if not fixture_keys:
         raise ValueError("ground_truth.json has no fixtures")
 
+    input_manifest = capture_input_manifest(
+        _REPO_ROOT,
+        [("ground_truth", (Path(ground_truth_path) if ground_truth_path else DEFAULT_GROUND_TRUTH_PATH).resolve())]
+        + [("source", Path(key)) for key in fixture_keys],
+    )
+
     mode = "offline_semgrep" if offline else "review_code"
     all_predictions: list[PredictedFinding] = []
     per_file: list[dict[str, Any]] = []
@@ -365,6 +375,7 @@ def run_benchmark(
         "label": label,
         "date": stamp,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "input_manifest": input_manifest,
         "mode": mode,
         "scored_bucket": (
             "accepted+needs_review" if include_needs_review else "accepted"
