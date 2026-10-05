@@ -42,6 +42,7 @@ from app.benchmark_run import (
     confidence_records_from_report_items,
     predictions_from_report_items,
 )
+from app.benchmark_results import validate_benchmark_label, write_benchmark_result
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REAL_WORLD_DIR = _REPO_ROOT / "benchmark" / "real_world"
@@ -97,6 +98,7 @@ def run_benchmark(
     include_needs_review: bool = False,
     label: str = "real_world",
 ) -> dict[str, Any]:
+    validate_benchmark_label(label)
     load_dotenv(_REPO_ROOT / ".env")
     manifest = load_manifest()
     problems = validate_manifest(manifest)
@@ -220,9 +222,7 @@ def run_benchmark(
 
     score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
     evaluation = summarize_evaluation(all_predictions, ground_truth, per_file)
-    _RESULTS_DIR.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
-    out_path = _RESULTS_DIR / f"{label}_{stamp}.json"
 
     payload = {
         "label": label,
@@ -248,7 +248,7 @@ def run_benchmark(
         "predictions": [item.model_dump() for item in all_predictions],
         "per_file": per_file,
     }
-    out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    out_path = write_benchmark_result(_RESULTS_DIR, payload)
     print("\n" + format_evaluation(evaluation))
     if inconclusive_fixtures:
         print(

@@ -22,7 +22,6 @@ distribution," not a scored benchmark.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 from dataclasses import dataclass, field
 from datetime import date, datetime, timezone
@@ -32,6 +31,7 @@ from typing import Any, Callable
 from dotenv import load_dotenv
 
 from app.benchmark_confidence_buckets import BUCKET_EDGES, confidence_bucket
+from app.benchmark_results import validate_benchmark_label, write_benchmark_result
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
@@ -319,6 +319,7 @@ def run_qualitative_oss(
     One run per file/worker — no reruns, no cherry-picking. Missing files,
     exceptions, and rate limits are recorded, never silently skipped.
     """
+    validate_benchmark_label(label)
     load_dotenv(_REPO_ROOT / ".env")
 
     if security_fn is None or architecture_fn is None:
@@ -423,9 +424,7 @@ def run_qualitative_oss(
     }
 
     out_dir = results_dir or _RESULTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
-    out_path = out_dir / f"{label}_{payload['date']}.json"
-    out_path.write_text(json.dumps(payload, indent=2, default=str) + "\n", encoding="utf-8")
+    out_path = write_benchmark_result(out_dir, payload, default=str)
     payload["_results_path"] = str(out_path)
     return payload
 

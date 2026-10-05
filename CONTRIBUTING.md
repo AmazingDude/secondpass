@@ -116,8 +116,9 @@ These commands use Semgrep, whose default rule packs may require network access,
 but make no model calls. Omit `--offline` for assisted Security evaluation;
 `python -m app.benchmark_run_architecture --label architecture_smoke` is assisted
 only. Assisted runs need provider configuration, may incur charges, and can
-initialize lesson memory. Use distinct labels: result filenames still use
-`label_YYYYMMDD.json`, so repeating a label on the same day overwrites its file.
+initialize lesson memory. Results use `label_YYYYMMDD_<run_id>.json`; repeating
+a label creates a separate file. Blank labels and labels containing path
+separators or platform-invalid filename characters are rejected.
 
 New results include an `evaluation` summary (`coverage-v1`). It keeps legacy
 file/type set matching: it is not instance-level accuracy or a calibration claim.

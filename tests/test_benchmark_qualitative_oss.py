@@ -248,3 +248,20 @@ def test_run_qualitative_oss_end_to_end_preserves_all_outcome_kinds(tmp_path: Pa
 
     written = list(tmp_path.glob("unit_test_qual_*.json"))
     assert len(written) == 1
+
+
+def test_qualitative_rerun_preserves_both_result_files(tmp_path: Path) -> None:
+    source = tmp_path / "clean.py"
+    source.write_text("x = 1\n", encoding="utf-8")
+    cohort = ({"project": "sample", "file_path": str(source)},)
+
+    def clean_review(path: str) -> dict:
+        return {"accepted": [], "needs_review": [], "inconclusive": False}
+
+    for _ in range(2):
+        run_qualitative_oss(
+            label="qual-rerun", results_dir=tmp_path, cohort=cohort,
+            security_fn=clean_review, architecture_fn=clean_review,
+        )
+
+    assert len(list(tmp_path.glob("qual-rerun_*.json"))) == 2

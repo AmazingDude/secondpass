@@ -55,5 +55,6 @@ python -m app.benchmark_run_real_world --offline   # Semgrep-only, no API key
 python -m app.benchmark_run_real_world             # full pipeline (needs LLM key)
 ```
 
-Results are written to `benchmark/results/real_world_<date>.json` — never
-overwriting the main suite's `baseline_*`/etc. result files.
+Results are written to `benchmark/results/real_world_<date>_<run_id>.json`.
+Each rerun gets a new file and does not overwrite earlier results or the main
+suite's `baseline_*` files.
