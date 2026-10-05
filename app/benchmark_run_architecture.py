@@ -20,7 +20,6 @@ path, only the LLM worker.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from datetime import date, datetime, timezone
@@ -43,6 +42,7 @@ from app.benchmark_run import (
     confidence_records_from_report_items,
     predictions_from_report_items,
 )
+from app.benchmark_results import validate_benchmark_label, write_benchmark_result
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
@@ -70,6 +70,7 @@ def run_architecture_benchmark(
     label: str = "architecture_baseline",
 ) -> dict[str, Any]:
     """Review each Architecture fixture, score predictions, write a results JSON file."""
+    validate_benchmark_label(label)
     load_dotenv(_REPO_ROOT / ".env")
     resolved_gt_path = ground_truth_path or DEFAULT_ARCHITECTURE_GROUND_TRUTH_PATH
     ground_truth = load_ground_truth(resolved_gt_path)
@@ -192,9 +193,7 @@ def run_architecture_benchmark(
     score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
     evaluation = summarize_evaluation(all_predictions, ground_truth, per_file)
     out_dir = results_dir or _RESULTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
-    out_path = out_dir / f"{label}_{stamp}.json"
 
     payload = {
         "label": label,
@@ -220,7 +219,7 @@ def run_architecture_benchmark(
         "predictions": [item.model_dump() for item in all_predictions],
         "per_file": per_file,
     }
-    out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    out_path = write_benchmark_result(out_dir, payload)
     print("\n" + format_evaluation(evaluation))
     if inconclusive_fixtures:
         print(

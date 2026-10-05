@@ -13,7 +13,6 @@ like missing_ownership_check.
 from __future__ import annotations
 
 import argparse
-import json
 import os
 import sys
 from datetime import date, datetime, timezone
@@ -33,6 +32,7 @@ from app.benchmark import (
     load_ground_truth,
     summarize_evaluation,
 )
+from app.benchmark_results import validate_benchmark_label, write_benchmark_result
 from app.scanner import ScanError, run_static_scan
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
@@ -227,6 +227,7 @@ def run_benchmark(
     label: str = "baseline",
 ) -> dict[str, Any]:
     """Review each fixture, score predictions, write a results JSON file."""
+    validate_benchmark_label(label)
     load_dotenv(_REPO_ROOT / ".env")
     ground_truth = load_ground_truth(ground_truth_path)
     fixture_keys = list_fixture_paths(ground_truth)
@@ -358,9 +359,7 @@ def run_benchmark(
     score: ScoreReport = evaluate(scored_predictions, scored_ground_truth)
     evaluation = summarize_evaluation(all_predictions, ground_truth, per_file)
     out_dir = results_dir or _RESULTS_DIR
-    out_dir.mkdir(parents=True, exist_ok=True)
     stamp = date.today().strftime("%Y%m%d")
-    out_path = out_dir / f"{label}_{stamp}.json"
 
     payload = {
         "label": label,
@@ -388,7 +387,7 @@ def run_benchmark(
         "predictions": [item.model_dump() for item in all_predictions],
         "per_file": per_file,
     }
-    out_path.write_text(json.dumps(payload, indent=2) + "\n", encoding="utf-8")
+    out_path = write_benchmark_result(out_dir, payload)
     print("\n" + format_evaluation(evaluation))
     if inconclusive_fixtures:
         print(

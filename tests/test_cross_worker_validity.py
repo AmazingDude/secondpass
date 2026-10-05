@@ -69,6 +69,24 @@ def test_security_benchmark_rejects_inconclusive_cross_worker_control(
     assert "ok clean:" not in capsys.readouterr().out
 
 
+def test_architecture_inconclusive_rerun_preserves_both_results(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
+) -> None:
+    offline_boundaries("not a valid review")
+
+    for _ in range(2):
+        with pytest.raises(RuntimeError, match="cross-worker Architecture review is inconclusive"):
+            run_architecture_benchmark(
+                ground_truth_path=clean_control_ground_truth,
+                results_dir=tmp_path,
+                label="architecture-rerun",
+            )
+
+    paths = list(tmp_path.glob("architecture-rerun_*.json"))
+    assert len(paths) == 2
+    assert all(json.loads(path.read_text(encoding="utf-8"))["evaluation"]["status"] == "invalid" for path in paths)
+
+
 def test_legacy_unknown_coverage_cannot_pass_security_cross_worker_check(
     tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries, monkeypatch, capsys,
 ) -> None:
