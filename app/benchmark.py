@@ -217,3 +217,8 @@ def format_evaluation(summary: dict[str, Any]) -> str:
         f'recall={display(metrics["recall"])}\n'
         f'Detection yield={display(summary["detection_yield"])}'
     )
+
+
+def evaluation_exit_code(summary: dict[str, Any]) -> int:
+    """Fail a benchmark command unless every requested fixture completed."""
+    return 0 if summary["status"] == "complete" else 1

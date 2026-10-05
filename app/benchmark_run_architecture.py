@@ -33,6 +33,7 @@ from app.benchmark import (
     PredictedFinding,
     ScoreReport,
     evaluate,
+    evaluation_exit_code,
     fixture_evaluation_status,
     format_evaluation,
     load_ground_truth,
@@ -295,12 +296,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         return 2
 
-    run_architecture_benchmark(
+    payload = run_architecture_benchmark(
         include_needs_review=args.include_needs_review,
         ground_truth_path=args.ground_truth,
         label=args.label,
     )
-    return 0
+    return evaluation_exit_code(payload["evaluation"])
 
 
 if __name__ == "__main__":
