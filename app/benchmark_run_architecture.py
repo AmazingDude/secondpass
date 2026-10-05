@@ -42,7 +42,11 @@ from app.benchmark_run import (
     confidence_records_from_report_items,
     predictions_from_report_items,
 )
-from app.benchmark_results import validate_benchmark_label, write_benchmark_result
+from app.benchmark_results import (
+    capture_input_manifest,
+    validate_benchmark_label,
+    write_benchmark_result,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"
@@ -77,6 +81,12 @@ def run_architecture_benchmark(
     fixture_keys = list_fixture_paths(ground_truth)
     if not fixture_keys:
         raise ValueError("ground_truth_architecture.json has no fixtures")
+
+    input_manifest = capture_input_manifest(
+        _REPO_ROOT,
+        [("ground_truth", resolved_gt_path.resolve())]
+        + [("source", Path(key)) for key in fixture_keys],
+    )
 
     all_predictions: list[PredictedFinding] = []
     per_file: list[dict[str, Any]] = []
@@ -199,6 +209,7 @@ def run_architecture_benchmark(
         "label": label,
         "date": stamp,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "input_manifest": input_manifest,
         "worker": "architecture",
         "mode": "architecture_review",
         "scored_bucket": (
