@@ -193,6 +193,48 @@ def test_cli_does_not_return_success_for_inconclusive_cross_worker_check(
     assert "ok no-authz-bleed:" not in output
 
 
+def test_architecture_cli_fails_when_scored_fixture_is_missing(
+    tmp_path: Path, offline_boundaries, monkeypatch, capsys,
+) -> None:
+    from app import benchmark_run_architecture
+
+    offline_boundaries(json.dumps({"has_issues": False, "summary": "Clean control.", "issues": []}))
+    ground_truth = tmp_path / "ground_truth.json"
+    ground_truth.write_text(json.dumps({"fixtures": {
+        str(tmp_path / "missing.py"): [{"finding_type": "layering_violation"}],
+    }}), encoding="utf-8")
+    results = tmp_path / "results"
+    monkeypatch.setattr(benchmark_run_architecture, "_RESULTS_DIR", results)
+
+    exit_code = benchmark_run_architecture.main([
+        "--ground-truth", str(ground_truth), "--label", "missing-scored",
+    ])
+
+    saved = json.loads(next(results.glob("missing-scored_*.json")).read_text(encoding="utf-8"))
+    assert exit_code == 1
+    assert saved["evaluation"]["status"] == "invalid"
+    assert saved["evaluation"]["fixtures"]["errored"] == 1
+    assert "ok no-authz-bleed:" in capsys.readouterr().out
+
+
+def test_architecture_cli_succeeds_when_scored_and_cross_worker_reviews_complete(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries, monkeypatch,
+) -> None:
+    from app import benchmark_run_architecture
+
+    offline_boundaries(json.dumps({"has_issues": False, "summary": "Clean control.", "issues": []}))
+    results = tmp_path / "results"
+    monkeypatch.setattr(benchmark_run_architecture, "_RESULTS_DIR", results)
+
+    exit_code = benchmark_run_architecture.main([
+        "--ground-truth", str(clean_control_ground_truth), "--label", "completed",
+    ])
+
+    saved = json.loads(next(results.glob("completed_*.json")).read_text(encoding="utf-8"))
+    assert exit_code == 0
+    assert saved["evaluation"]["status"] == "complete"
+
+
 @pytest.mark.parametrize("suite", ["security", "architecture", "standing"])
 def test_completed_clean_cross_worker_controls_still_pass(
     tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries, capsys, suite: str,
