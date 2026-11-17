@@ -88,6 +88,44 @@ def test_architecture_inconclusive_rerun_preserves_both_results(
     assert all(json.loads(path.read_text(encoding="utf-8"))["evaluation"]["status"] == "invalid" for path in paths)
 
 
+@pytest.mark.parametrize("completed", [False, True])
+def test_architecture_artifact_fingerprints_additional_cross_worker_controls(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
+    completed: bool,
+) -> None:
+    offline_boundaries(
+        json.dumps({"has_issues": False, "summary": "Clean control.", "issues": []})
+        if completed else "not a valid review"
+    )
+    if completed:
+        run_architecture_benchmark(
+            ground_truth_path=clean_control_ground_truth,
+            results_dir=tmp_path, label="control-inputs",
+        )
+    else:
+        with pytest.raises(RuntimeError, match="cross-worker Architecture review is inconclusive"):
+            run_architecture_benchmark(
+                ground_truth_path=clean_control_ground_truth,
+                results_dir=tmp_path, label="control-inputs",
+            )
+
+    saved = json.loads(next(tmp_path.glob("control-inputs_*.json")).read_text(encoding="utf-8"))
+    controls = [row for row in saved["input_manifest"]["inputs"]
+                if row["role"] == "cross_worker_control"]
+    expected_paths = [
+        "benchmark/fixtures/notes_idor.py",
+        "benchmark/fixtures/ops_shell.py",
+        "benchmark/fixtures/hardcoded_secret.py",
+        "benchmark/fixtures/path_traversal.py",
+        "benchmark/fixtures/clean_ownership.py",
+    ]
+    assert [row["path"] for row in controls] == expected_paths
+    repo_root = Path(__file__).resolve().parents[1]
+    for row in controls:
+        assert row["status"] == "present"
+        assert row["sha256"] == hashlib.sha256((repo_root / row["path"]).read_bytes()).hexdigest()
+
+
 @pytest.mark.parametrize("relative_ground_truth", [False, True])
 def test_architecture_result_records_inputs_even_when_inconclusive(
     tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
@@ -105,7 +143,8 @@ def test_architecture_result_records_inputs_even_when_inconclusive(
         )
 
     saved = json.loads(next(tmp_path.glob("architecture-inputs_*.json")).read_text(encoding="utf-8"))
-    rows = saved["input_manifest"]["inputs"]
+    rows = [row for row in saved["input_manifest"]["inputs"]
+            if row["role"] != "cross_worker_control"]
     assert rows == [
         {"role": "ground_truth", "path": str(clean_control_ground_truth), "status": "present", "sha256": hashlib.sha256(clean_control_ground_truth.read_bytes()).hexdigest()},
         {"role": "source", "path": _CLEAN_ARCHITECTURE_FIXTURE, "status": "present", "sha256": hashlib.sha256((Path(__file__).resolve().parents[1] / _CLEAN_ARCHITECTURE_FIXTURE).read_bytes()).hexdigest()},
