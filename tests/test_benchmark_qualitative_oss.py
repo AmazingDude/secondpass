@@ -7,6 +7,8 @@ are preserved rather than silently dropped.
 
 from __future__ import annotations
 
+import hashlib
+import json
 from pathlib import Path
 
 from app.benchmark_qualitative_oss import (
@@ -265,3 +267,23 @@ def test_qualitative_rerun_preserves_both_result_files(tmp_path: Path) -> None:
         )
 
     assert len(list(tmp_path.glob("qual-rerun_*.json"))) == 2
+
+
+def test_qualitative_result_records_cohort_source_fingerprint(tmp_path: Path) -> None:
+    source = tmp_path / "cohort.py"
+    source.write_bytes(b"value = 1\n")
+
+    def clean_review(path: str) -> dict:
+        return {"accepted": [], "needs_review": [], "inconclusive": False}
+
+    result = run_qualitative_oss(
+        label="qual-inputs", results_dir=tmp_path,
+        cohort=({"project": "sample", "file_path": str(source)},),
+        security_fn=clean_review, architecture_fn=clean_review,
+    )
+
+    saved = json.loads(Path(result["_results_path"]).read_text(encoding="utf-8"))
+    assert saved["input_manifest"]["inputs"] == [{
+        "role": "source", "path": str(source), "status": "present",
+        "sha256": hashlib.sha256(b"value = 1\n").hexdigest(),
+    }]

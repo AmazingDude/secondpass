@@ -42,7 +42,11 @@ from app.benchmark_run import (
     confidence_records_from_report_items,
     predictions_from_report_items,
 )
-from app.benchmark_results import validate_benchmark_label, write_benchmark_result
+from app.benchmark_results import (
+    capture_input_manifest,
+    validate_benchmark_label,
+    write_benchmark_result,
+)
 
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _REAL_WORLD_DIR = _REPO_ROOT / "benchmark" / "real_world"
@@ -109,6 +113,13 @@ def run_benchmark(
     fixture_keys = list_fixture_paths(ground_truth)
     if not fixture_keys:
         raise ValueError("ground_truth_real_world.json has no fixtures")
+
+    input_manifest = capture_input_manifest(
+        _REPO_ROOT,
+        [("ground_truth", _GROUND_TRUTH_PATH),
+         ("suite_manifest", _MANIFEST_PATH.relative_to(_REPO_ROOT))]
+        + [("source", Path(key)) for key in fixture_keys],
+    )
 
     mode = "offline_semgrep" if offline else "review_code"
     all_predictions: list[PredictedFinding] = []
@@ -228,6 +239,7 @@ def run_benchmark(
         "label": label,
         "date": stamp,
         "created_at": datetime.now(timezone.utc).isoformat(),
+        "input_manifest": input_manifest,
         "mode": mode,
         "suite": "real_world",
         "scored_bucket": "accepted+needs_review" if include_needs_review else "accepted",

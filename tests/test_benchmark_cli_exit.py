@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import hashlib
 import subprocess
 import sys
 from pathlib import Path
@@ -48,6 +49,10 @@ def test_security_cli_fails_when_scored_fixture_is_missing(
     assert saved["evaluation"]["status"] == "invalid"
     assert saved["evaluation"]["fixtures"]["errored"] == 1
     assert saved["score"]["false_negatives"] == 1
+    assert saved["input_manifest"]["inputs"][1] == {
+        "role": "source", "path": str(tmp_path / "missing.py"),
+        "status": "missing", "sha256": None,
+    }
     assert "Evaluation: invalid" in capsys.readouterr().out
 
 
@@ -123,6 +128,37 @@ def test_security_rerun_preserves_both_result_files(
     assert len({json.loads(path.read_text(encoding="utf-8"))["run_id"] for path in paths}) == 2
 
 
+@pytest.mark.parametrize("relative_ground_truth", [False, True])
+def test_security_result_records_preflight_input_fingerprints(
+    tmp_path: Path, monkeypatch, script_scanner, relative_ground_truth: bool,
+) -> None:
+    clean = tmp_path / "clean.py"
+    clean.write_bytes(b"print('clean')\n")
+    ground_truth = tmp_path / "ground_truth.json"
+    ground_truth.write_bytes(json.dumps({"fixtures": {str(clean): []}}).encode("utf-8"))
+    results = tmp_path / "results"
+    monkeypatch.setattr(benchmark_run, "_RESULTS_DIR", results)
+    script_scanner(0)
+    if relative_ground_truth:
+        monkeypatch.chdir(tmp_path)
+
+    assert benchmark_run.main([
+        "--offline", "--ground-truth",
+        "ground_truth.json" if relative_ground_truth else str(ground_truth),
+        "--label", "fingerprints",
+    ]) == 0
+
+    saved = json.loads(next(results.glob("fingerprints_*.json")).read_text(encoding="utf-8"))
+    manifest = saved["input_manifest"]
+    assert manifest["schema"] == "inputs-v1"
+    assert manifest["git_revision"] is None or len(manifest["git_revision"]) == 40
+    assert manifest["git_dirty"] is None or isinstance(manifest["git_dirty"], bool)
+    assert manifest["inputs"] == [
+        {"role": "ground_truth", "path": str(ground_truth), "status": "present", "sha256": hashlib.sha256(ground_truth.read_bytes()).hexdigest()},
+        {"role": "source", "path": str(clean), "status": "present", "sha256": hashlib.sha256(b"print('clean')\n").hexdigest()},
+    ]
+
+
 def test_security_rejects_path_like_label_before_scanning(
     tmp_path: Path, monkeypatch,
 ) -> None:
@@ -194,3 +230,23 @@ def test_real_world_rerun_preserves_both_result_files(
     paths = list(results.glob("real-rerun_*.json"))
     assert len(paths) == 2
     assert first_path.read_bytes() == first_bytes
+
+
+def test_real_world_result_records_suite_and_source_fingerprints(
+    tmp_path: Path, monkeypatch, script_scanner,
+) -> None:
+    results = tmp_path / "results"
+    monkeypatch.setattr(benchmark_run_real_world, "_RESULTS_DIR", results)
+    script_scanner(0)
+
+    assert benchmark_run_real_world.main(["--offline", "--label", "real-inputs"]) == 0
+
+    saved = json.loads(next(results.glob("real-inputs_*.json")).read_text(encoding="utf-8"))
+    rows = saved["input_manifest"]["inputs"]
+    assert [row["role"] for row in rows] == ["ground_truth", "suite_manifest"] + ["source"] * 8
+    manifest_path = Path("benchmark/real_world/manifest.json")
+    assert rows[1] == {
+        "role": "suite_manifest", "path": manifest_path.as_posix(), "status": "present",
+        "sha256": hashlib.sha256(manifest_path.read_bytes()).hexdigest(),
+    }
+    assert all(row["status"] == "present" and len(row["sha256"]) == 64 for row in rows)
