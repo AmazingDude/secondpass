@@ -297,17 +297,14 @@ def main(argv: list[str] | None = None) -> int:
     args = parser.parse_args(argv)
 
     if not args.offline:
+        from app.llm import resolve_chat_config
+
         load_dotenv(_REPO_ROOT / ".env")
-        provider = os.getenv("LLM_PROVIDER", "groq").lower()
-        key_env = {
-            "groq": "GROQ_API_KEY",
-            "gemini": "GEMINI_API_KEY",
-            "openrouter": "OPENROUTER_API_KEY",
-        }.get(provider, "GROQ_API_KEY")
-        if not (os.getenv(key_env) or "").strip():
+        try:
+            resolve_chat_config()
+        except (ValueError, RuntimeError) as exc:
             print(
-                f"No {key_env} for LLM_PROVIDER={provider}. "
-                "Pass --offline for Semgrep-only eval, or set the key.",
+                f"{exc} Pass --offline for Semgrep-only eval, or configure the provider.",
                 file=sys.stderr,
             )
             return 2
