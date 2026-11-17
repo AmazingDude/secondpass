@@ -82,10 +82,17 @@ def run_architecture_benchmark(
     if not fixture_keys:
         raise ValueError("ground_truth_architecture.json has no fixtures")
 
+    from app.benchmark_cross_worker import (
+        SECURITY_FIXTURES_EXPECT_ARCHITECTURE_NO_AUTHZ_BLEED,
+        assert_architecture_report_clean_of_security_bleed,
+    )
+
     input_manifest = capture_input_manifest(
         _REPO_ROOT,
         [("ground_truth", resolved_gt_path.resolve())]
-        + [("source", Path(key)) for key in fixture_keys],
+        + [("source", Path(key)) for key in fixture_keys]
+        + [("cross_worker_control", Path(key))
+           for key in SECURITY_FIXTURES_EXPECT_ARCHITECTURE_NO_AUTHZ_BLEED],
     )
 
     all_predictions: list[PredictedFinding] = []
@@ -244,10 +251,6 @@ def run_architecture_benchmark(
     print(f"Wrote {display}")
 
     from app.agent import review_architecture
-    from app.benchmark_cross_worker import (
-        SECURITY_FIXTURES_EXPECT_ARCHITECTURE_NO_AUTHZ_BLEED,
-        assert_architecture_report_clean_of_security_bleed,
-    )
 
     print(
         "\n[cross-worker] Architecture must not invent security bleed "

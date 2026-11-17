@@ -124,7 +124,9 @@ New result JSON also records an `inputs-v1` preflight manifest: SHA-256 hashes
 or missing/unreadable states for the listed ground truth, suite manifest, and
 source files, plus Git revision/dirty state when available. It records what was
 observed before fixture review; it does not pin files for the run or capture
-exact model, rule, prompt, lesson, or cross-worker-control versions. Do not
+exact model, rule, prompt, or lesson versions. Architecture also records its
+five additional cross-worker inputs with role `cross_worker_control`; these
+preflight entries describe planned inputs, not which checks completed. Do not
 treat it as a complete reproducibility guarantee.
 
 New results include an `evaluation` summary (`coverage-v1`). It keeps legacy
