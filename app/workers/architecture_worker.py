@@ -362,6 +362,15 @@ def _mentions_symbol(text: str, symbols: set[str]) -> bool:
     return False
 
 
+def _mentions_qualified_path(text: str, path: str | Path) -> bool:
+    candidate = Path(str(path).replace("\\", "/"))
+    for start in range(len(candidate.parts) - 1):
+        suffix = Path(*candidate.parts[start:]).as_posix().lower()
+        if re.search(rf"(?<![\w./-])(?:\./)?{re.escape(suffix)}(?![\w.-])", text):
+            return True
+    return False
+
+
 def is_off_target_finding(
     target_path: str,
     *,
@@ -377,15 +386,17 @@ def is_off_target_finding(
     Keeps cross-file context for detection, but drops findings whose evidence
     only names a related file (or never references the target at all).
     """
-    text = f"{location}\n{evidence}\n{message}\n{suggested_fix}".lower()
+    text = f"{location}\n{evidence}\n{message}\n{suggested_fix}".lower().replace("\\", "/")
     mentions_target_path = _mentions_path(text, target_path)
     mentions_context_path = False
+    target = Path(str(target_path).replace("\\", "/"))
+    if re.search(rf"[\w.-]+/{re.escape(target.name.lower())}(?![\w.-])", text):
+        if not _mentions_qualified_path(text, target):
+            return not _mentions_symbol(text, _target_defined_symbols(target_source))
     for item in context_files or []:
         if _mentions_path(text, item.path):
-            # Ignore when the "context" path is the target itself.
-            if Path(str(item.path).replace("\\", "/")).name.lower() == Path(
-                str(target_path).replace("\\", "/")
-            ).name.lower():
+            # Ignore the target itself, not other files sharing its basename.
+            if Path(str(item.path).replace("\\", "/")).resolve() == target.resolve():
                 continue
             mentions_context_path = True
             break
