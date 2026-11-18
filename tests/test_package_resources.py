@@ -479,9 +479,15 @@ import sys
 from pathlib import Path
 from types import SimpleNamespace
 
+mcp_case = sys.argv[2].startswith('mcp-')
+case = sys.argv[2].removeprefix('mcp-')
+
 class NoAgentIntegrations(importlib.abc.MetaPathFinder):
     def find_spec(self, fullname, path=None, target=None):
-        if fullname.split('.')[0] in {'openai', 'chromadb', 'tavily', 'dotenv', 'fastapi', 'mcp', 'uvicorn'}:
+        blocked = {'openai', 'chromadb', 'tavily'}
+        if not mcp_case:
+            blocked.update({'dotenv', 'fastapi', 'mcp', 'uvicorn'})
+        if fullname.split('.')[0] in blocked:
             raise AssertionError('Static mode must not import agent integrations')
 
 def no_network(*args, **kwargs):
@@ -493,8 +499,15 @@ socket.socket.connect_ex = no_network
 socket.getaddrinfo = no_network
 sqlite3.connect = no_network
 install_dir = Path(sys.argv[1])
-case = sys.argv[2]
 sys.path.insert(0, str(install_dir))
+if mcp_case:
+    Path('.env').write_text('GROQ_API_KEY=unused-development-key')
+
+    def guard_environment_file(event, args):
+        if event == 'open' and isinstance(args[0], str) and Path(args[0]).name == '.env':
+            raise AssertionError('Static MCP opened the environment file')
+
+    sys.addaudithook(guard_environment_file)
 from app import scanner
 target = Path('shell.py').resolve()
 target.write_text(
@@ -571,6 +584,16 @@ def semgrep(command, **kwargs):
 
 if not case.startswith('real-'):
     scanner.subprocess.run = semgrep
+if mcp_case:
+    import dotenv
+    dotenv.load_dotenv = no_network
+    from app.mcp_server import review_code_tool
+
+    report = review_code_tool(path=str(target), mode='static',
+                              rules_path=str(project_rules) if project_rules else None)
+    assert 'app.state_paths' not in sys.modules
+    print(report)
+    raise SystemExit(0)
 entry = next(entry for entry in metadata.distribution('secondpass').entry_points
              if entry.group == 'console_scripts' and entry.name == 'secondpass')
 run = entry.load()
@@ -604,6 +627,31 @@ def test_installed_static_cli_can_select_project_rules(
     assert "Services must not import web handlers." in result.stdout
     assert "local Semgrep rules" in result.stdout
     assert "limited Python rule pack" not in result.stdout
+
+
+@pytest.mark.parametrize("case, count, incomplete", [
+    ("finding", 1, False), ("clean", 0, False),
+    ("project-finding", 1, False), ("project-clean", 0, False),
+    ("project-invalid", 0, True), ("project-partial", 1, True),
+])
+def test_installed_mcp_static_review_avoids_provider_and_memory_setup(
+    installed_wheel: Path, tmp_path: Path, case: str, count: int, incomplete: bool,
+) -> None:
+    import json
+
+    result = _installed_static_cli(installed_wheel, tmp_path, f"mcp-{case}")
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["mode"] == "static"
+    assert report["finding_count"] == count
+    assert report["inconclusive"] is incomplete
+    assert report["coverage_status"] == ("inconclusive" if incomplete else "ok")
+    assert report["analysis_scope"] == "single_python_file_static_patterns"
+    assert report["persisted"] is False
+    assert "no_issues" not in report
+    assert "private-rule-error-canary" not in result.stdout + result.stderr
+    assert "private-scanner-error-canary" not in result.stdout + result.stderr
+    assert not (tmp_path / "state" / "secondpass.db").exists()
 
 
 def test_installed_cli_rejects_project_rules_in_assisted_mode(
@@ -665,7 +713,8 @@ def _installed_static_cli(
         cwd=tmp_path,
         env={**environment, "SECONDPASS_DATA_DIR": str(state_dir),
              "PYTHONDONTWRITEBYTECODE": "1"},
-        capture_output=True, text=True, timeout=90 if case.startswith("real-") else 30,
+        capture_output=True, text=True,
+        timeout=90 if case.removeprefix("mcp-").startswith("real-") else 30,
     )
 
 
@@ -724,6 +773,26 @@ def test_installed_project_rules_with_real_semgrep(
     if exit_code:
         assert "Static review incomplete" in result.stdout
         assert "Zero matches only means" not in result.stdout
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Real Semgrep startup is validated on Linux CI only")
+@pytest.mark.parametrize("case, count, incomplete", [
+    ("real-project-finding", 1, False), ("real-project-clean", 0, False),
+    ("real-project-invalid", 0, True),
+])
+def test_installed_mcp_project_rules_with_real_semgrep(
+    installed_wheel: Path, tmp_path: Path, case: str, count: int, incomplete: bool,
+) -> None:
+    import json
+
+    result = _installed_static_cli(installed_wheel, tmp_path, f"mcp-{case}")
+    assert result.returncode == 0, result.stdout + result.stderr
+    report = json.loads(result.stdout)
+    assert report["finding_count"] == count
+    assert report["inconclusive"] is incomplete
+    assert report["coverage_status"] == ("inconclusive" if incomplete else "ok")
+    if count:
+        assert report["findings"][0]["rule_id"] == "project.no-web-import"
 
 
 def test_installed_static_cli_does_not_treat_skipped_file_as_complete(

@@ -9,8 +9,6 @@ import sys
 from pathlib import Path
 from typing import TypedDict
 
-from app.hooks import log_tool_call
-
 # Substrings seen in real Semgrep stderr when rule packs fail to download (§21 DNS).
 _NETWORK_MARKERS = (
     "getaddrinfo",
@@ -98,7 +96,6 @@ def _source_snippet(result: dict) -> str:
     return result.get("extra", {}).get("lines", "").strip()
 
 
-@log_tool_call
 def run_static_scan(
     paths: list[str], *, config_path: str | Path | None = None
 ) -> list[Finding]:

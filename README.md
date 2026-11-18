@@ -138,7 +138,8 @@ even when matches exist. Static scans are not saved to review history yet.
 The bundled rule does not require registry downloads; metrics and version checks
 are disabled. Semgrep must still run on your machine. The real-engine smoke test
 runs on Linux CI; Windows engine startup has not been validated. Directory and
-diff reviews, the API, dashboard and MCP remain assisted workflows. Omitting
+diff reviews, the API and dashboard remain assisted workflows. MCP also supports
+the file-only static mode described below. Omitting
 `--mode` preserves the existing assisted default and its provider requirements.
 
 To check a project-specific source pattern, select a local Semgrep YAML file:
@@ -169,7 +170,7 @@ name or URL. Rules are not discovered or generated automatically.
 This example checks one import pattern in the selected Python file; it does not
 check indirect dependencies or establish a repository-wide architecture contract.
 The file-only scope, completed-scan exit status and history limitation above also
-apply to custom rules. These rules are not used by assisted review, API or MCP.
+apply to custom rules. Assisted review and the API do not use these rules.
 
 ### Assisted reviews and history
 
@@ -331,7 +332,33 @@ Semgrep-only on that real-world set scored **0/4** recall; logic-review carries 
 python -m app.mcp_server
 ```
 
-Exposes `review_code` (`path` and/or `diff=true`). Point the client at this repo’s venv Python with `cwd` = project root. Keys load from `.env`.
+Exposes `review_code`. Point the client at this repo's venv Python with `cwd` set
+to the project root. Default `mode="assisted"` accepts either a `path` or
+`diff=true` and loads provider keys from `.env` when called.
+
+For the same no-key, file-only scan as the CLI, call the tool with:
+
+```json
+{
+  "path": "path/to/service.py",
+  "mode": "static",
+  "rules_path": "project-rules.yml"
+}
+```
+
+Omit `rules_path` to use the bundled shell-invocation rule. Relative paths use
+the server's working directory. Static calls do not load `.env`, call a model,
+retrieve lessons or write review history; `memory_enabled` is ignored. The agent
+hosting the MCP connection can interpret the returned evidence using its own
+model access. That host may send tool results to its configured provider.
+
+Static reports include raw `findings`, `finding_count`, `coverage_status`,
+`inconclusive`, `analysis_scope="single_python_file_static_patterns"` and
+`persisted=false`. Incomplete scans retain available matches. Invalid input
+returns an inconclusive error, never a clean result. Completed zero-match scans
+only mean the selected rules did not match; logic and repository-wide architecture
+analysis were not performed. Static mode does not support directories or diffs;
+`rules_path` is rejected in assisted mode.
 
 ```bash
 python -m app.mcp_client_smoke path/to/file.py

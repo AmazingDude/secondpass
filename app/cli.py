@@ -701,17 +701,15 @@ def review(
                 markup=False,
             )
             raise typer.Exit(code=1)
-        from importlib.resources import as_file, files
-        from app.scanner import ScanError, run_static_scan
+        from app.static_review import review_static_file
 
-        incomplete = False
         try:
-            rule_source = rules if rules is not None else files("app").joinpath("static_rules.yml")
-            with as_file(rule_source) as rule_path:
-                matches = run_static_scan([str(path)], config_path=rule_path)
-        except ScanError as exc:
+            report = review_static_file(path, rules_path=rules)
+            matches = report["findings"]
+            incomplete = report["inconclusive"]
+        except (OSError, ValueError):
             incomplete = True
-            matches = exc.findings
+            matches = []
         console.print(
             f"Static mode: local Semgrep rules from {rules}." if rules is not None else
             "Static mode: limited Python rule pack (subprocess.run with shell=True).",
