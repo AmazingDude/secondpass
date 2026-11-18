@@ -294,16 +294,14 @@ def main(argv: list[str] | None = None) -> int:
     )
     args = parser.parse_args(argv)
 
+    from app.llm import resolve_chat_config
+
     load_dotenv(_REPO_ROOT / ".env")
-    provider = os.getenv("LLM_PROVIDER", "groq").lower()
-    key_env = {
-        "groq": "GROQ_API_KEY",
-        "gemini": "GEMINI_API_KEY",
-        "openrouter": "OPENROUTER_API_KEY",
-    }.get(provider, "GROQ_API_KEY")
-    if not (os.getenv(key_env) or "").strip():
+    try:
+        resolve_chat_config()
+    except (ValueError, RuntimeError) as exc:
         print(
-            f"No {key_env} for LLM_PROVIDER={provider}. "
+            f"{exc} "
             "Architecture Worker has no offline mode (LLM-only).",
             file=sys.stderr,
         )

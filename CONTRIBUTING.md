@@ -120,6 +120,11 @@ initialize lesson memory. Results use `label_YYYYMMDD_<run_id>.json`; repeating
 a label creates a separate file. Blank labels and labels containing path
 separators or platform-invalid filename characters are rejected.
 
+Assisted benchmark commands validate the same provider setup as chat: Groq,
+OpenAI, Gemini (including `GOOGLE_API_KEY` as a fallback), or OpenRouter.
+Missing credentials or unsupported providers return exit code 2 before review.
+The Security and real-world `--offline` modes skip model setup validation.
+
 New result JSON also records an `inputs-v1` preflight manifest: SHA-256 hashes
 or missing/unreadable states for the listed ground truth, suite manifest, and
 source files, plus Git revision/dirty state when available. It records what was

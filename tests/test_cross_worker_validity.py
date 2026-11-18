@@ -333,3 +333,80 @@ def test_completed_clean_cross_worker_controls_still_pass(
         assert payload["evaluation"]["status"] == "complete"
         expected_label = "ok clean:" if suite == "security" else "ok no-authz-bleed:"
         assert expected_label in capsys.readouterr().out
+
+
+@pytest.fixture
+def benchmark_cli(suite: str, tmp_path: Path, monkeypatch):
+    from app import benchmark_run, benchmark_run_architecture, benchmark_run_real_world
+
+    runner = {
+        "security": benchmark_run,
+        "architecture": benchmark_run_architecture,
+        "real_world": benchmark_run_real_world,
+    }[suite]
+    monkeypatch.setattr(runner, "_RESULTS_DIR", tmp_path)
+    return runner.main
+
+
+@pytest.mark.parametrize("suite", ["security", "architecture", "real_world"])
+@pytest.mark.parametrize("provider,key_env", [
+    ("groq", "GROQ_API_KEY"),
+    ("OpenAI", "OPENAI_API_KEY"),
+    ("gemini", "GEMINI_API_KEY"),
+    ("gemini", "GOOGLE_API_KEY"),
+    ("openrouter", "OPENROUTER_API_KEY"),
+])
+def test_benchmark_cli_accepts_supported_provider_key(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
+    monkeypatch, benchmark_cli, suite: str, provider: str, key_env: str,
+) -> None:
+    offline_boundaries(json.dumps({"has_issues": False, "summary": "Clean control.", "issues": []}))
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    for name in ("GROQ_API_KEY", "OPENAI_API_KEY", "GEMINI_API_KEY", "GOOGLE_API_KEY", "OPENROUTER_API_KEY"):
+        monkeypatch.delenv(name, raising=False)
+    monkeypatch.setenv(key_env, "offline-provider-key")
+    arguments = ["--label", "openai-key"]
+    if suite != "real_world":
+        arguments.extend(["--ground-truth", str(clean_control_ground_truth)])
+    assert benchmark_cli(arguments) == 0
+    saved = json.loads(next(tmp_path.glob("openai-key_*.json")).read_text(encoding="utf-8"))
+    assert saved["evaluation"]["status"] == "complete"
+
+
+@pytest.mark.parametrize("suite", ["security", "architecture", "real_world"])
+@pytest.mark.parametrize("provider,expected_error", [
+    ("openai", "OPENAI_API_KEY is required"),
+    ("unsupported-provider", "Unsupported LLM_PROVIDER"),
+])
+def test_benchmark_cli_rejects_invalid_setup_before_external_work(
+    tmp_path: Path, monkeypatch, capsys, benchmark_cli, suite: str,
+    provider: str, expected_error: str,
+) -> None:
+    monkeypatch.setenv("LLM_PROVIDER", provider)
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.setenv("GROQ_API_KEY", "unused-fake-key-canary")
+    monkeypatch.setattr("app.llm.OpenAI", lambda **kwargs: pytest.fail("provider must not start"))
+    monkeypatch.setattr("app.scanner.subprocess.run", lambda *args, **kwargs: pytest.fail("scan must not start"))
+    assert benchmark_cli(["--label", "bad-setup"]) == 2
+    error = capsys.readouterr().err
+    assert expected_error in error
+    assert "unused-fake-key-canary" not in error
+    assert not list(tmp_path.glob("bad-setup_*.json"))
+
+
+@pytest.mark.parametrize("suite", ["security", "real_world"])
+def test_offline_benchmark_does_not_require_valid_provider_setup(
+    tmp_path: Path, clean_control_ground_truth: Path, offline_boundaries,
+    monkeypatch, benchmark_cli, suite: str,
+) -> None:
+    offline_boundaries("offline mode must not request a model")
+    monkeypatch.setenv("LLM_PROVIDER", "unsupported-provider")
+    monkeypatch.setattr("app.llm.OpenAI", lambda **kwargs: pytest.fail("provider must not start"))
+    arguments = ["--offline", "--label", "offline-setup"]
+    if suite == "security":
+        arguments.extend(["--ground-truth", str(clean_control_ground_truth)])
+
+    assert benchmark_cli(arguments) == 0
+    saved = json.loads(next(tmp_path.glob("offline-setup_*.json")).read_text(encoding="utf-8"))
+    assert saved["evaluation"]["status"] == "complete"
+    assert saved["provider"] is None
