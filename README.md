@@ -141,6 +141,36 @@ runs on Linux CI; Windows engine startup has not been validated. Directory and
 diff reviews, the API, dashboard and MCP remain assisted workflows. Omitting
 `--mode` preserves the existing assisted default and its provider requirements.
 
+To check a project-specific source pattern, select a local Semgrep YAML file:
+
+```bash
+secondpass review path/to/service.py --mode static --rules project-rules.yml
+```
+
+For example, save this as `project-rules.yml` to flag a direct
+`import example.web` statement:
+
+```yaml
+rules:
+  - id: project.no-web-import
+    languages: [python]
+    severity: WARNING
+    message: Services must not import web handlers.
+    pattern: import example.web
+```
+
+The selected file **replaces** the bundled rules for that scan. The output shows
+the selected file, matching rule IDs and source locations. Paths are resolved
+from the directory where you run the command. Missing files or directories are
+rejected; invalid rules or incomplete scans exit nonzero, retaining available
+matches. `--rules` requires `--mode static` and accepts a local file, not a registry
+name or URL. Rules are not discovered or generated automatically.
+
+This example checks one import pattern in the selected Python file; it does not
+check indirect dependencies or establish a repository-wide architecture contract.
+The file-only scope, completed-scan exit status and history limitation above also
+apply to custom rules. These rules are not used by assisted review, API or MCP.
+
 ### Assisted reviews and history
 
 ```bash

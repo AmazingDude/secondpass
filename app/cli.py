@@ -619,6 +619,11 @@ def review(
         ReviewMode.assisted, "--mode",
         help="Assisted review (default) or a limited static Python scan without model keys.",
     ),
+    rules: Path | None = typer.Option(
+        None, "--rules",
+        exists=True, file_okay=True, dir_okay=False, readable=True, resolve_path=True,
+        help="Local Semgrep rules file for --mode static; replaces the bundled rules.",
+    ),
     diff: bool = typer.Option(
         False,
         "--diff",
@@ -685,7 +690,10 @@ def review(
         help="Enable lesson retrieval (default). --no-memory skips store initialization and retrieval.",
     ),
 ) -> None:
-    """Run an assisted review or inspect matches from the bundled static rule pack."""
+    """Run an assisted review or inspect matches from local static rules."""
+    if rules is not None and mode is not ReviewMode.static:
+        console.print("--rules requires --mode static.", markup=False)
+        raise typer.Exit(code=2)
     if mode is ReviewMode.static:
         if diff or path is None or not path.is_file() or path.suffix != ".py":
             console.print(
@@ -698,12 +706,17 @@ def review(
 
         incomplete = False
         try:
-            with as_file(files("app").joinpath("static_rules.yml")) as rule_path:
+            rule_source = rules if rules is not None else files("app").joinpath("static_rules.yml")
+            with as_file(rule_source) as rule_path:
                 matches = run_static_scan([str(path)], config_path=rule_path)
         except ScanError as exc:
             incomplete = True
             matches = exc.findings
-        console.print("Static mode: limited Python rule pack (subprocess.run with shell=True).", markup=False)
+        console.print(
+            f"Static mode: local Semgrep rules from {rules}." if rules is not None else
+            "Static mode: limited Python rule pack (subprocess.run with shell=True).",
+            markup=False,
+        )
         console.print(f"Static rule matches: {len(matches)}", markup=False)
         for match in matches:
             console.print(_render_scan_detail({
@@ -722,7 +735,11 @@ def review(
                 markup=False,
             )
             raise typer.Exit(code=1)
-        console.print("Zero matches only means this rule did not match.", markup=False)
+        console.print(
+            "Zero matches only means the selected rules did not match." if rules is not None else
+            "Zero matches only means this rule did not match.",
+            markup=False,
+        )
         return
     if diff and path is not None:
         console.print(
