@@ -119,6 +119,8 @@ def run_static_scan(
     try:
         completed = subprocess.run(
             command,
+            # File scans must never read the calling MCP client's protocol stream.
+            stdin=subprocess.DEVNULL,
             capture_output=True,
             text=True,
             encoding="utf-8",

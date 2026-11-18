@@ -2,10 +2,13 @@
 
 from __future__ import annotations
 
+import asyncio
+import json
 import os
 import stat
 import subprocess
 import sys
+import sysconfig
 from collections.abc import Iterator
 from importlib.metadata import distributions
 from pathlib import Path
@@ -61,6 +64,36 @@ def installed_wheel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
     finally:
         for path, mode in reversed(readonly_paths):
             path.chmod(mode)
+
+
+def test_installed_mcp_scans_file_over_stdio(installed_wheel: Path, tmp_path: Path) -> None:
+    from mcp import ClientSession, StdioServerParameters
+    from mcp.client.stdio import stdio_client
+
+    (tmp_path / "service.py").write_text("import example.web\n", encoding="utf-8")
+    (tmp_path / "policy.yml").write_text(
+        "rules:\n- id: project.no-web\n  languages: [python]\n  severity: WARNING\n"
+        "  message: Keep services independent of web.\n  pattern: import example.web\n",
+        encoding="utf-8",
+    )
+    server = StdioServerParameters(
+        command=sys.executable, args=["-m", "app.mcp_server"], cwd=str(tmp_path),
+        env={"PYTHONPATH": str(installed_wheel), "PYTHONDONTWRITEBYTECODE": "1",
+             "PATH": os.pathsep.join([sysconfig.get_path("scripts"), os.environ["PATH"]])},
+    )
+
+    async def scan():
+        async with stdio_client(server) as streams, ClientSession(*streams) as session:
+            await session.initialize()
+            return await session.call_tool("review_code", {
+                "mode": "static", "path": "service.py", "rules_path": "policy.yml",
+            })
+
+    result = asyncio.run(asyncio.wait_for(scan(), timeout=90))
+    assert not result.isError
+    report = json.loads(result.content[0].text)
+    assert report["coverage_status"] == "ok"
+    assert [finding["rule_id"] for finding in report["findings"]] == ["project.no-web"]
 
 
 def test_installed_wheel_requires_chroma_only_for_memory_extra(installed_wheel: Path) -> None:
