@@ -502,14 +502,40 @@ target.write_text(
     if case in {'clean', 'real-clean'} else
     'import subprocess\\nsubprocess.run(command, shell=True)\\n'
 )
+project_rules = None
+if case.startswith(('project-', 'real-project-')):
+    project_rules = Path('project-rules.yml').resolve()
+    project_rules.write_text(
+        'rules:\\n  - id: project.no-web-import\\n'
+        '    languages: [python]\\n    severity: WARNING\\n'
+        '    message: Services must not import web handlers.\\n'
+        '    pattern: import example.web\\n'
+    )
+    target.write_text('import example.domain\\n' if case.endswith('clean') else 'import example.web\\n')
+    if case.endswith('missing'):
+        project_rules.unlink()
+    elif case.endswith('directory'):
+        project_rules.unlink()
+        project_rules.mkdir()
+    elif case.endswith('invalid'):
+        project_rules.write_text('rules: [\\n')
 
 def semgrep(command, **kwargs):
     configs = [command[i + 1] for i, value in enumerate(command) if value == '--config']
     assert len(configs) == 1
     rule_path = Path(configs[0])
-    assert rule_path.is_relative_to(install_dir)
+    if project_rules:
+        assert rule_path == project_rules
+    else:
+        assert rule_path.is_relative_to(install_dir)
     assert rule_path.is_file()
-    assert 'subprocess.run' in rule_path.read_text()
+    if case == 'project-invalid':
+        assert rule_path.read_text() == 'rules: [\\n'
+        return SimpleNamespace(returncode=2, stderr='private-rule-error-canary', stdout=json.dumps({
+            'results': [], 'errors': [{'message': 'private-rule-error-canary'}],
+            'paths': {'scanned': []},
+        }))
+    assert ('import example.web' if project_rules else 'subprocess.run') in rule_path.read_text()
     assert '--metrics=off' in command
     assert '--disable-version-check' in command
     if case == 'malformed':
@@ -523,13 +549,18 @@ def semgrep(command, **kwargs):
             'results': [{}], 'errors': [], 'paths': {'scanned': [str(target)]},
         }))
     payload = {
-        'results': [] if case in {'skipped', 'clean'} else [{
-                     'check_id': 'secondpass.python.subprocess-shell' if '--no-rewrite-rule-ids' in command
+        'results': [] if case in {'skipped', 'clean', 'project-clean'} else [{
+                     'check_id': 'project.no-web-import' if project_rules else
+                                 'secondpass.python.subprocess-shell' if '--no-rewrite-rule-ids' in command
                                  else 'installed.app.secondpass.python.subprocess-shell',
-                     'path': str(target), 'start': {'line': 2}, 'end': {'line': 2},
-                     'extra': {'severity': 'WARNING', 'message': 'Inspect shell execution.'}}],
+                     'path': str(target),
+                     'start': {'line': 1 if project_rules else 2},
+                     'end': {'line': 1 if project_rules else 2},
+                     'extra': {'severity': 'WARNING',
+                               'message': 'Services must not import web handlers.' if project_rules
+                                          else 'Inspect shell execution.'}}],
         'errors': None if case == 'invalid-errors' else
-                  [{'message': 'private-scanner-error-canary'}] if case == 'partial' else [],
+                  [{'message': 'private-scanner-error-canary'}] if case in {'partial', 'project-partial'} else [],
         'paths': {'scanned': [] if case == 'skipped' else
                   [str(target) + chr(0)] if case == 'invalid-path' else [str(target)]},
     }
@@ -543,7 +574,10 @@ if not case.startswith('real-'):
 entry = next(entry for entry in metadata.distribution('secondpass').entry_points
              if entry.group == 'console_scripts' and entry.name == 'secondpass')
 run = entry.load()
-sys.argv = ['secondpass', 'review', str(target), '--mode', 'static']
+sys.argv = ['secondpass', 'review', str(target), '--mode',
+            'assisted' if case == 'project-assisted' else 'static']
+if project_rules:
+    sys.argv.extend(['--rules', str(project_rules)])
 run()
 """
 
@@ -557,6 +591,65 @@ def test_installed_static_cli_runs_without_agent_integrations(
     assert "limited Python rule pack" in result.stdout
     assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
     assert not (tmp_path / "state" / "chromadb").exists()
+
+
+def test_installed_static_cli_can_select_project_rules(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "project-finding")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Static rule matches: 1" in result.stdout
+    assert "Rule: project.no-web-import" in result.stdout
+    assert "import example.web" in result.stdout
+    assert "Services must not import web handlers." in result.stdout
+    assert "local Semgrep rules" in result.stdout
+    assert "limited Python rule pack" not in result.stdout
+
+
+def test_installed_cli_rejects_project_rules_in_assisted_mode(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "project-assisted")
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "--rules requires --mode static" in result.stdout
+    assert "Static rule matches" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+def test_installed_static_cli_labels_allowed_project_pattern(
+    installed_wheel: Path, tmp_path: Path,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, "project-clean")
+    assert result.returncode == 0, result.stdout + result.stderr
+    assert "Static rule matches: 0" in result.stdout
+    assert "Zero matches only means the selected rules did not match" in result.stdout
+    assert "local Semgrep rules" in result.stdout
+
+
+@pytest.mark.parametrize("case", ["project-missing", "project-directory"])
+def test_installed_cli_rejects_missing_or_directory_rules(
+    installed_wheel: Path, tmp_path: Path, case: str,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == 2, result.stdout + result.stderr
+    assert "Static rule matches" not in result.stdout
+    assert "Traceback" not in result.stderr
+
+
+@pytest.mark.parametrize("case, count", [("project-invalid", 0), ("project-partial", 1)])
+def test_installed_static_cli_reports_incomplete_project_rules(
+    installed_wheel: Path, tmp_path: Path, case: str, count: int,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == 1, result.stdout + result.stderr
+    assert "Static review incomplete" in result.stdout
+    assert f"Static rule matches: {count}" in result.stdout
+    assert "Zero matches only means" not in result.stdout
+    assert "private-rule-error-canary" not in result.stdout + result.stderr
+    assert "private-scanner-error-canary" not in result.stdout + result.stderr
+    assert "Traceback" not in result.stderr
+    if count:
+        assert "Rule: project.no-web-import" in result.stdout
 
 
 def _installed_static_cli(
@@ -611,6 +704,26 @@ def test_installed_static_cli_with_real_semgrep(
     if count:
         assert "Rule: secondpass.python.subprocess-shell" in result.stdout, result.stdout
     assert not (tmp_path / "state" / "chromadb").exists()
+
+
+@pytest.mark.skipif(sys.platform != "linux", reason="Real Semgrep startup is validated on Linux CI only")
+@pytest.mark.parametrize(
+    "case, exit_code, count",
+    [("real-project-finding", 0, 1), ("real-project-clean", 0, 0), ("real-project-invalid", 1, 0)],
+)
+def test_installed_project_rules_with_real_semgrep(
+    installed_wheel: Path, tmp_path: Path, case: str, exit_code: int, count: int,
+) -> None:
+    result = _installed_static_cli(installed_wheel, tmp_path, case)
+    assert result.returncode == exit_code, result.stdout + result.stderr
+    assert f"Static rule matches: {count}" in result.stdout
+    assert "local Semgrep rules" in result.stdout
+    if count:
+        assert "Rule: project.no-web-import" in result.stdout
+        assert "import example.web" in result.stdout
+    if exit_code:
+        assert "Static review incomplete" in result.stdout
+        assert "Zero matches only means" not in result.stdout
 
 
 def test_installed_static_cli_does_not_treat_skipped_file_as_complete(
