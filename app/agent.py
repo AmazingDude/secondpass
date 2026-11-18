@@ -10,18 +10,20 @@ from typing import Any, Literal
 
 from app.confidence_gate import GateResult, apply_confidence_gate
 from app.gitdiff import ChangedFile, finding_in_changed_lines
-from app.hooks import agent_scope, log_agent_event
+from app.hooks import agent_scope, log_agent_event, log_tool_call
 from app.llm import LLMRateLimitedError, chat
 from app.memory import seed_memory
 from app.review_response import parse_review_response
 from app.scanner import Finding as ScannerFinding
-from app.scanner import ScanError, run_static_scan
+from app.scanner import ScanError
+from app.scanner import run_static_scan as scan_files
 from app.schema import Finding as StructuredFinding
 from app.schema import ReviewResult
 from app.supervisor import supervise_finding
 from app.workers.architecture_worker import run_architecture_worker
 
 StageCallback = Callable[[str], None]
+run_static_scan = log_tool_call(scan_files)
 
 MAX_TOOL_ITERATIONS = 6
 _MAX_LOGIC_SOURCE_CHARS = 12000

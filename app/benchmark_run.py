@@ -37,8 +37,11 @@ from app.benchmark_results import (
     validate_benchmark_label,
     write_benchmark_result,
 )
-from app.scanner import ScanError, run_static_scan
+from app.hooks import log_tool_call
+from app.scanner import ScanError
+from app.scanner import run_static_scan as scan_files
 
+run_static_scan = log_tool_call(scan_files)
 _REPO_ROOT = Path(__file__).resolve().parent.parent
 _FIXTURES_DIR = _REPO_ROOT / "benchmark" / "fixtures"
 _RESULTS_DIR = _REPO_ROOT / "benchmark" / "results"

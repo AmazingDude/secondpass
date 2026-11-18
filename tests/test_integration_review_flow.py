@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+import os
 import subprocess
 import time
 from pathlib import Path
@@ -331,6 +332,121 @@ def test_mcp_path_without_memory_keeps_finding_and_advertises_option(
     assert report["finding_count"] == 1
     assert "private lesson-store canary" not in json.dumps(report)
     assert "private retrieval canary" not in json.dumps(report)
+
+
+def test_mcp_advertises_explicit_no_key_static_mode() -> None:
+    tool = next(tool for tool in asyncio.run(mcp.list_tools()) if tool.name == "review_code")
+    properties = tool.inputSchema["properties"]
+    assert properties["mode"]["enum"] == ["assisted", "static"]
+    assert properties["mode"]["default"] == "assisted"
+    assert "rules_path" in properties
+
+
+def test_mcp_static_call_returns_local_rule_evidence(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path,
+) -> None:
+    target = tmp_path / "service.py"
+    target.write_text("import example.web\n", encoding="utf-8")
+    rules = tmp_path / "rules.yml"
+    rules.write_text(
+        "rules:\n  - id: project.no-web-import\n    languages: [python]\n"
+        "    severity: WARNING\n    message: Do not import web handlers.\n"
+        "    pattern: import example.web\n", encoding="utf-8",
+    )
+
+    def semgrep(command, **kwargs):
+        assert command[command.index("--config") + 1] == str(rules)
+        return SimpleNamespace(returncode=0, stderr="", stdout=json.dumps({
+            "results": [{"check_id": "project.no-web-import", "path": str(target),
+                         "start": {"line": 1}, "end": {"line": 1},
+                         "extra": {"message": "Do not import web handlers.", "severity": "WARNING"}}],
+            "errors": [], "paths": {"scanned": [str(target)]},
+        }))
+
+    monkeypatch.setattr(subprocess, "run", semgrep)
+    def no_network(*args, **kwargs):
+        raise AssertionError("Static review must not contact a provider")
+
+    monkeypatch.setattr("httpx.Client.send", no_network)
+    content = asyncio.run(mcp.call_tool("review_code", {
+        "path": str(target), "mode": "static", "rules_path": str(rules),
+    }))
+    # FastMCP versions may return structured output alongside text blocks.
+    if isinstance(content, tuple):
+        content = content[0]
+    report = json.loads(content[0].text)
+    assert report["mode"] == "static"
+    assert report["coverage_status"] == "ok"
+    assert report["finding_count"] == 1
+    assert report["findings"][0]["rule_id"] == "project.no-web-import"
+    assert report["findings"][0]["snippet"] == "import example.web"
+    assert report["inconclusive"] is False
+
+
+@pytest.mark.parametrize("arguments", [
+    {"mode": "static"},
+    {"mode": "static", "diff": True},
+    {"mode": "static", "path": "missing.py"},
+    {"mode": "static", "path": "."},
+    {"mode": "static", "rules_path": "missing.yml"},
+    {"mode": "static", "rules_path": ""},
+    {"mode": "static", "rules_path": "https://example.invalid/rules.yml"},
+    {"rules_path": "rules.yml"},
+])
+def test_mcp_invalid_static_options_are_inconclusive(
+    tmp_path: Path, arguments: dict[str, Any],
+) -> None:
+    target = tmp_path / "service.py"
+    target.write_text("import example.web\n", encoding="utf-8")
+    options = {"path": str(target), **arguments}
+    if arguments == {"mode": "static"}:
+        options.pop("path")
+    report = json.loads(review_code_tool(**options))
+    assert report["coverage_status"] == "inconclusive"
+    assert report["inconclusive"] is True
+    assert report["finding_count"] == 0
+    assert "error" in report
+    assert "traceback" not in report
+    assert "no_issues" not in report
+    if options.get("mode") == "static":
+        assert report["analysis_scope"] == "single_python_file_static_patterns"
+        assert report["persisted"] is False
+
+
+@pytest.mark.parametrize("argument", ["path", "rules_path"])
+def test_mcp_static_rejects_share_paths_before_lookup(
+    argument: str, tmp_path: Path, monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    target = tmp_path / "service.py"
+    target.write_text("pass\n", encoding="utf-8")
+    attempted = []
+    resolve = Path.resolve
+
+    def local_resolve(path, *args, **kwargs):
+        if "remote-share" in str(path):
+            attempted.append(path)
+            raise OSError("unexpected share lookup")
+        return resolve(path, *args, **kwargs)
+
+    monkeypatch.setattr(Path, "resolve", local_resolve)
+    options = {"path": str(target), argument: "//remote-share/example/file.py"}
+    report = json.loads(review_code_tool(mode="static", **options))
+    assert report["inconclusive"] is True
+    assert not attempted
+
+
+@pytest.mark.skipif(os.name != "nt", reason="Windows extended drive path syntax")
+def test_mcp_static_accepts_extended_local_drive_path(tmp_path: Path, monkeypatch) -> None:
+    target = tmp_path / "service.py"
+    target.write_text("pass\n", encoding="utf-8")
+    extended = "//?/" + target.as_posix()
+    monkeypatch.setattr(subprocess, "run", lambda command, **kwargs: SimpleNamespace(
+        returncode=0, stderr="", stdout=json.dumps({
+            "results": [], "errors": [], "paths": {"scanned": [command[-1]]},
+        }),
+    ))
+    report = json.loads(review_code_tool(path=extended, mode="static"))
+    assert report["coverage_status"] == "ok"
 
 
 def test_mcp_diff_without_memory_reviews_changed_lines(

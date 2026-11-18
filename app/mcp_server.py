@@ -14,23 +14,31 @@ from __future__ import annotations
 import json
 import traceback
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
-from dotenv import load_dotenv
 from mcp.server.fastmcp import FastMCP
+from mcp.server.fastmcp.server import Settings
 
-# Load .env before tool calls (keys for Groq/Tavily). Keep imports light so
-# Cursor's MCP handshake completes before chromadb/semgrep/openai load.
-load_dotenv(Path(__file__).resolve().parent.parent / ".env")
 
-mcp = FastMCP(
-    "secondpass",
-    instructions=(
-        "Personal security review agent. Call review_code on a file/directory "
-        "path, or set diff=true to review only git-changed files in the cwd repo. "
-        "Reviews can take 30–120s (Semgrep + LLM); wait for the JSON report."
-    ),
+def _create_server() -> FastMCP:
+    # FastMCP v1 reads a cwd .env even for stdio discovery. Its constructor
+    # does not expose pydantic-settings' env_file option.
+    previous = Settings.model_config["env_file"]
+    try:
+        Settings.model_config["env_file"] = None
+        return FastMCP("secondpass", instructions=_INSTRUCTIONS)
+    finally:
+        Settings.model_config["env_file"] = previous
+
+
+_INSTRUCTIONS = (
+    "Personal security review agent. Call review_code on a file/directory "
+    "path, or set diff=true to review only git-changed files in the cwd repo. "
+    "For a single Python file without a model key, use mode=static, optionally "
+    "with rules_path pointing to a local Semgrep file. Assisted reviews can "
+    "take 30–120s (Semgrep + LLM); wait for the JSON report."
 )
+mcp = _create_server()
 
 
 def _json_report(report: dict[str, Any]) -> str:
@@ -43,12 +51,23 @@ def review_code_tool(
     path: str | None = None,
     diff: bool = False,
     memory_enabled: bool = True,
+    mode: Literal["assisted", "static"] = "assisted",
+    rules_path: str | None = None,
 ) -> str:
     """Run secondpass security review and return a structured JSON report.
 
     Use this when you need a personal security pass over code: Semgrep scan,
     optional memory of past lessons, optional web context, and an LLM explanation/fix.
     Set memory_enabled=false to skip lesson indexing and retrieval.
+
+    Use mode="static" for one Python file without provider credentials, dotenv,
+    lesson memory or web access. An optional rules_path selects a local Semgrep
+    file instead of bundled rules. Static mode ignores memory_enabled, rejects
+    diff, and returns raw rule matches with coverage_status/inconclusive for the
+    selected scan, analysis_scope and persisted=false. No no_issues or confidence
+    gate is inferred; zero matches only means the selected rules did not match.
+    Static results are not saved to history. Assisted mode remains the default;
+    rules_path is only supported in static mode.
 
     Modes (mutually exclusive):
     - path mode: pass `path` to a file or directory (absolute or relative).
@@ -60,12 +79,36 @@ def review_code_tool(
 
     This call is slow (often 30–120 seconds). Prefer a single file path for tests.
 
-    Returns JSON with ReviewResult + GateResult, accepted[] and needs_review[]
+    Assisted mode returns JSON with ReviewResult + GateResult, accepted[] and needs_review[]
     enriched with scan detail, memory/web context, explanation and suggested fix,
     plus provider metadata. ``findings`` remains an alias for accepted findings.
     A clean review has finding_count=0, empty buckets, and no_issues=true.
     """
-    # Lazy-import heavy deps so server startup / list_tools stays fast.
+    if mode == "static":
+        try:
+            if diff or not path:
+                raise ValueError("Static mode requires a file path without diff.")
+            from app.static_review import review_static_file
+
+            return _json_report(review_static_file(path, rules_path=rules_path))
+        except Exception:  # noqa: BLE001 — keep errors safe and the MCP process alive
+            return _json_report({
+                "mode": "static", "coverage_status": "inconclusive", "inconclusive": True,
+                "finding_count": 0, "findings": [],
+                "analysis_scope": "single_python_file_static_patterns", "persisted": False,
+                "error": "Static review could not run. Check the Python file, local rules and Semgrep installation.",
+            })
+    if mode != "assisted" or rules_path is not None:
+        return _json_report({
+            "error": "Use mode=assisted or mode=static; rules_path requires mode=static.",
+            "coverage_status": "inconclusive", "inconclusive": True,
+            "finding_count": 0, "findings": [],
+        })
+
+    # Assisted-only setup keeps discovery and static calls free of provider keys.
+    from dotenv import load_dotenv
+
+    load_dotenv(Path(__file__).resolve().parent.parent / ".env")
     from app.agent import review_changed_files, review_code
     from app.gitdiff import GitDiffError, collect_diff_selection
     from app.scanner import ScanError
