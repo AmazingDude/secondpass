@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import os
+from dataclasses import dataclass, field
 from typing import Any
 
 from dotenv import load_dotenv
@@ -48,6 +49,37 @@ _PROVIDERS = {
         "default_model": "openrouter/auto",
     },
 }
+
+
+@dataclass(frozen=True)
+class ChatConfig:
+    model: str
+    base_url: str
+    api_key: str = field(repr=False)
+
+
+def resolve_chat_config() -> ChatConfig:
+    """Resolve the same supported provider and credentials for setup and chat."""
+    provider = os.getenv("LLM_PROVIDER", "groq").lower()
+    config = _PROVIDERS.get(provider)
+    if config is None:
+        supported = ", ".join(_PROVIDERS)
+        raise ValueError(
+            f"Unsupported LLM_PROVIDER {provider!r}. Choose one of: {supported}."
+        )
+
+    api_key_env = config["api_key_env"]
+    api_key = (os.getenv(api_key_env) or "").strip()
+    if not api_key and provider == "gemini":
+        api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
+    if not api_key:
+        raise RuntimeError(f"{api_key_env} is required when LLM_PROVIDER={provider}.")
+
+    return ChatConfig(
+        model=os.getenv("LLM_MODEL") or config["default_model"],
+        base_url=config["base_url"],
+        api_key=api_key,
+    )
 
 # Review/analysis default: pin sampling as low as the provider allows.
 DEFAULT_TEMPERATURE = 0.0
@@ -154,24 +186,10 @@ def chat(
     a tiny epsilon and finally omits the field rather than failing the review.
     Each successful attempt (including first-try 0.0) is logged via log_agent_event.
     """
-    provider = os.getenv("LLM_PROVIDER", "groq").lower()
-    config = _PROVIDERS.get(provider)
-    if config is None:
-        supported = ", ".join(_PROVIDERS)
-        raise ValueError(
-            f"Unsupported LLM_PROVIDER {provider!r}. Choose one of: {supported}."
-        )
-
-    api_key_env = config["api_key_env"]
-    api_key = (os.getenv(api_key_env) or "").strip()
-    if not api_key and provider == "gemini":
-        api_key = (os.getenv("GOOGLE_API_KEY") or "").strip()
-    if not api_key:
-        raise RuntimeError(f"{api_key_env} is required when LLM_PROVIDER={provider}.")
-
-    client = OpenAI(api_key=api_key, base_url=config["base_url"])
+    config = resolve_chat_config()
+    client = OpenAI(api_key=config.api_key, base_url=config.base_url)
     request: dict[str, Any] = {
-        "model": os.getenv("LLM_MODEL") or config["default_model"],
+        "model": config.model,
         "messages": messages,
     }
     if tools is not None:
