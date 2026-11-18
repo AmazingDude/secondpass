@@ -137,7 +137,8 @@ even when matches exist. Static scans are not saved to review history yet.
 
 The bundled rule does not require registry downloads; metrics and version checks
 are disabled. Semgrep must still run on your machine. The real-engine smoke test
-runs on Linux CI; Windows engine startup has not been validated. Directory and
+runs on Linux CI. A local Windows check with Semgrep 1.171.0 also verified
+matching, allowed, and invalid-rule cases through the installed MCP server. Directory and
 diff reviews, the API and dashboard remain assisted workflows. MCP also supports
 the file-only static mode described below. Omitting
 `--mode` preserves the existing assisted default and its provider requirements.
