@@ -361,9 +361,16 @@ only mean the selected rules did not match; logic and repository-wide architectu
 analysis were not performed. Static mode does not support directories or diffs;
 `rules_path` is rejected in assisted mode.
 
+To verify a keyless connection over stdio from the checkout, run:
+
 ```bash
-python -m app.mcp_client_smoke path/to/file.py
+python -m app.mcp_client_smoke app/static_review.py --mode static
+python -m app.mcp_client_smoke path/to/file.py --mode static --rules project-rules.yml
 ```
+
+Use paths relative to your current directory. The smoke client exits successfully
+when the static scan completes, including when it finds matches. An incomplete
+scan exits with status 1. Omit `--mode` to smoke-test the assisted workflow.
 
 ---
 
