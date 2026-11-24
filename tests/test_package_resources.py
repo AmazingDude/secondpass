@@ -66,16 +66,18 @@ def installed_wheel(tmp_path_factory: pytest.TempPathFactory) -> Iterator[Path]:
             path.chmod(mode)
 
 
+_PROJECT_RULE = (
+    "rules:\n- id: project.no-web\n  languages: [python]\n  severity: WARNING\n"
+    "  message: Keep services independent of web.\n  pattern: import example.web\n"
+)
+
+
 def test_installed_mcp_scans_file_over_stdio(installed_wheel: Path, tmp_path: Path) -> None:
     from mcp import ClientSession, StdioServerParameters
     from mcp.client.stdio import stdio_client
 
     (tmp_path / "service.py").write_text("import example.web\n", encoding="utf-8")
-    (tmp_path / "policy.yml").write_text(
-        "rules:\n- id: project.no-web\n  languages: [python]\n  severity: WARNING\n"
-        "  message: Keep services independent of web.\n  pattern: import example.web\n",
-        encoding="utf-8",
-    )
+    (tmp_path / "policy.yml").write_text(_PROJECT_RULE, encoding="utf-8")
     server = StdioServerParameters(
         command=sys.executable, args=["-m", "app.mcp_server"], cwd=str(tmp_path),
         env={"PYTHONPATH": str(installed_wheel), "PYTHONDONTWRITEBYTECODE": "1",
@@ -94,6 +96,37 @@ def test_installed_mcp_scans_file_over_stdio(installed_wheel: Path, tmp_path: Pa
     report = json.loads(result.content[0].text)
     assert report["coverage_status"] == "ok"
     assert [finding["rule_id"] for finding in report["findings"]] == ["project.no-web"]
+
+
+@pytest.mark.parametrize("rules, expected, matches", [
+    (_PROJECT_RULE, 0, ["project.no-web"]),
+    ("rules: [", 1, []),
+    (None, 0, []),
+], ids=["matching", "invalid", "bundled"])
+def test_mcp_smoke_client_reports_static_coverage(
+    tmp_path: Path, rules: str | None, expected: int, matches: list[str],
+) -> None:
+    root = Path(__file__).resolve().parents[1]
+    source = "app/static_review.py"
+    rule_args = []
+    if rules is not None:
+        target = tmp_path / "service.py"
+        target.write_text("import example.web\n", encoding="utf-8")
+        policy = tmp_path / "policy.yml"
+        policy.write_text(rules, encoding="utf-8")
+        source = str(target)
+        rule_args = ["--rules", str(policy)]
+    environment = {name: value for name, value in os.environ.items() if not name.endswith("_API_KEY")}
+    environment["PATH"] = os.pathsep.join([sysconfig.get_path("scripts"), os.environ["PATH"]])
+    result = subprocess.run(
+        [sys.executable, "-m", "app.mcp_client_smoke", source, "--mode", "static", *rule_args],
+        cwd=root, env=environment,
+        capture_output=True, text=True, encoding="utf-8", timeout=90,
+    )
+    assert result.returncode == expected, result.stdout + result.stderr
+    report = json.loads(result.stdout[result.stdout.index("{\n"):])
+    assert report["coverage_status"] == ("ok" if expected == 0 else "inconclusive")
+    assert [item["rule_id"] for item in report["findings"]] == matches
 
 
 def test_installed_wheel_requires_chroma_only_for_memory_extra(installed_wheel: Path) -> None:
