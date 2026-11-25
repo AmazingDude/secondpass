@@ -60,17 +60,58 @@ One Supervisor, two workers, same schema + gate. Chroma retrieves seed lessons a
 
 ## Setup
 
+Clone the repository and open its root directory.
+
 ```bash
-git clone <your-repo-url> secondpass
+git clone https://github.com/AmazingDude/secondpass.git
 cd secondpass
+```
 
-python -m venv .venv
-# Windows
-.venv\Scripts\activate
-# macOS / Linux
+### First review without keys
+
+Install the base package and run a single-file static review through MCP.
+
+**Windows PowerShell**
+
+```powershell
+py -3 -m venv .venv
+.\.venv\Scripts\python.exe -m pip install .
+.\.venv\Scripts\python.exe -m app.mcp_client_smoke app/static_review.py --mode static
+```
+
+**macOS and Linux**
+
+```bash
+python3 -m venv .venv
 source .venv/bin/activate
+python -m pip install .
+python -m app.mcp_client_smoke app/static_review.py --mode static
+```
 
-pip install -e ".[memory]"
+Expect `"coverage_status": "ok"` and `"finding_count": 0` for this sample.
+See [the static CLI example](#try-a-scan-without-model-keys) for a sample
+project rule and [MCP](#mcp) for how to pass it to the smoke client.
+
+Activate the environment before running the CLI and MCP examples below. On
+PowerShell, run `.\.venv\Scripts\Activate.ps1`. The macOS and Linux
+setup above already activates it.
+
+### Assisted reviews
+
+With the environment active, install the memory extra and copy the example
+configuration for the default assisted workflow.
+
+**Windows PowerShell**
+
+```powershell
+python -m pip install -e ".[memory]"
+Copy-Item .env.example .env
+```
+
+**macOS and Linux**
+
+```bash
+python -m pip install -e ".[memory]"
 cp .env.example .env
 ```
 
@@ -370,7 +411,8 @@ python -m app.mcp_client_smoke path/to/file.py --mode static --rules project-rul
 
 Use paths relative to your current directory. The smoke client exits successfully
 when the static scan completes, including when it finds matches. An incomplete
-scan exits with status 1. Omit `--mode` to smoke-test the assisted workflow.
+scan or MCP tool error exits with status 1. Omit `--mode` to smoke-test the
+assisted workflow.
 
 ---
 
